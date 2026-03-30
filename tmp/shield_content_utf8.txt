@@ -1,0 +1,996 @@
+S.H.I.E.L.D
+Systematic Host-level Intrusion and Encryption-pattern based Live Detection
+Pipeline Architecture & Design Document
+Version 1.0   |   Target OS: Ubuntu Server (LTS)   |   Classification: Confidential
+Property
+Value
+System Name
+S.H.I.E.L.D — Ransomware Detection System
+Target Environment
+Ubuntu Server 20.04 / 22.04 / 24.04 LTS (Headless)
+Detection Method
+eBPF Sensors + Council of Unsupervised ML + Hybrid XGBoost
+Dataset
+RanSMAP 2024 — Storage and Memory Access Patterns
+Families Covered
+AESCrypt, Conti (+ 7 variants), Darkside, LockBit, REvil, Ryuk, WannaCry
+Overall F1 Score
+0.9766 (Validation) | 0.9272 (Out-of-Distribution Hardware)
+Darkside Detection
+98.33%  |  Ryuk Detection: 92.50%
+Enforcement Method
+BPF-LSM + bpf_send_signal() — kernel-space termination
+Report Standard
+CERT-IN Incident Report Format with MITRE ATT&CK Mapping
+Dashboard
+Push-only WebSocket, TLS Mutual Auth, Read-only, No Incoming Messages
+Table of Contents
+1. System Overview
+S.H.I.E.L.D is a real-time ransomware detection and response system designed for headless Ubuntu servers. It operates entirely at the kernel level using eBPF sensors, passes behavioural features through a C++ feature engineering engine, scores each process using a council of six unsupervised anomaly detection models fused with a semi-supervised XGBoost classifier, applies a recency-weighted sliding window rank analysis, and enforces decisions through BPF-LSM hooks without any dependency on userspace signal delivery.
+The system follows a zero-trust philosophy: every process is scored regardless of its identity. No process is exempt from monitoring. Context is used to calibrate the response level, never to bypass detection.
+1.1 Pipeline Architecture
+Complete Pipeline — Data Flow
+  [Kernel]  eBPF Tracepoints + LSM Hooks
+       |
+       | ring buffer (per-event, zero-copy)
+       v
+  [Userspace C++]  Feature Engineering Engine
+       |
+       | feature vector (32 features per PID per 10s window)
+       v
+  [Python / C++ Inference]  AI Model Council + XGBoost Hybrid
+       |
+       | anomaly score (0.0 – 1.0)
+       v
+  [C++]  Sliding Window Rank Analysis (recency-weighted, 60s)
+       |
+       | BENIGN / MEDIUM / HIGH decision
+       v
+  [Kernel]  LSM Response Engine
+       |--- MEDIUM  -> throttle I/O write rate via LSM
+       |--- HIGH    -> SIGSTOP -> 10s wait -> bpf_send_signal(SIGKILL)
+       |
+       v
+  [Userspace]  Forensic Snapshot + CERT-IN Report Generation
+       |
+       v
+  [Dashboard]  Push-only WebSocket, TLS Mutual Auth, Read-only
+1.2 Design Principles
+Principle
+Implementation
+Zero Trust
+Every process is scored. No whitelists. Known processes use context-aware response calibration only.
+Kernel-First Enforcement
+BPF-LSM hooks enforce decisions in kernel space. No userspace latency in the kill path.
+Unsupervised Core
+Council of 6 models trained on benign-only data. Detects unknown ransomware families without labelled attack samples.
+Explainability
+SHAP TreeExplainer on XGBoost. Every alert includes feature attribution for analyst review.
+Tamper Resistance
+eBPF maps frozen after load. Detector runs in isolated cgroup with seccomp and read-only memory mapping.
+False Positive Safety
+Throttle → Suspend → Kill sequence. Three decision gates before termination.
+Read-Only Dashboard
+Push-only WebSocket. Server never reads incoming messages. TLS mutual auth.
+MODULE 1
+eBPF Sensor Layer
+Kernel-level data collection using tracepoints and BPF-LSM hooks
+1.1 Purpose and Role
+The eBPF sensor layer is the eyes of S.H.I.E.L.D. It operates entirely inside the Linux kernel, intercepts storage and memory I/O events for every process on the system in real time, and passes raw event data to userspace through a lock-free ring buffer. It also hosts the enforcement hooks that carry out decisions made by the AI model. The sensor layer has two distinct eBPF program types that serve completely different roles and must not be conflated.
+Two eBPF Program Types
+TYPE 1 — Tracepoints (data collection)
+   Attached to kernel tracepoints for raw_syscalls, vfs, and block I/O
+   Read-only observation of kernel events
+   Output: event structs written to BPF ring buffer
+TYPE 2 — BPF-LSM (enforcement)
+   Attached to Linux Security Module hook points
+   Can ALLOW or DENY operations by returning 0 or -EPERM
+   Used for I/O throttling and process termination
+   Requires kernel >= 5.7 with CONFIG_BPF_LSM=y
+1.2 Tracepoint Programs — Data Collection
+1.2.1 Storage Access Tracepoints
+These tracepoints mirror exactly what RanSMAP collected using its thin hypervisor (BitVisor), translated to the Linux eBPF equivalent. The goal is to capture the same LBA-level storage access patterns that the training dataset was built from.
+Tracepoint
+Data Captured
+block:block_rq_issue
+LBA address, transfer size, read/write flag, PID, timestamp — raw block device I/O matching RanSMAP ata_read/ata_write columns
+syscalls:sys_enter_write
+File descriptor, buffer pointer, count — write syscall entry for entropy sampling
+syscalls:sys_exit_write
+Return value — confirms write completed, triggers entropy computation
+syscalls:sys_enter_rename / renameat2
+Old path, new path, flags — detects file extension changes (encrypted rename pattern)
+syscalls:sys_enter_unlink / unlinkat
+Pathname, dirfd — detects mass file deletion (data-destructive ransomware)
+syscalls:sys_enter_openat
+Filename, flags — detects ransom note creation by filename pattern matching in BPF
+1.2.2 Memory Access Tracepoints
+These tracepoints capture page-level memory access patterns, corresponding to the mem_read.csv, mem_write.csv, mem_readwrite.csv, and mem_exec.csv files from RanSMAP. The training dataset used Extended Page Table (EPT) interception via a hypervisor. On Linux without a hypervisor, the equivalent is captured through userfaultfd and perf_mem events.
+Tracepoint / Hook
+Data Captured
+perf_mem events (PERF_SAMPLE_ADDR)
+Guest Physical Address equivalent (GPA) — page-level memory access address
+mm:mm_filemap_add_to_page_cache
+Memory read events — file pages loaded into page cache (mem_read equivalent)
+mm:mm_filemap_delete_from_page_cache
+Memory eviction events — pages written back (mem_write equivalent)
+syscalls:sys_enter_mmap
+Memory mapping events — anonymous vs file-backed (mem_exec equivalent for executable pages)
+exceptions:page_fault_user
+User-space page faults — high page fault rate indicates memory-mapped file encryption
+1.2.3 Entropy Computation in eBPF
+A critical design decision: Shannon entropy is computed inside the eBPF program using a BPF map histogram, not in userspace C++. This reduces the latency of the feature engineering pipeline by approximately 40% and avoids copying raw data buffers to userspace.
+In-Kernel Entropy Computation
+For each write syscall:
+  1. BPF program reads the first 512 bytes of the write buffer using bpf_probe_read_user()
+  2. Byte frequency histogram built in a per-CPU BPF array map (256 buckets)
+  3. Shannon entropy approximated using fixed-point arithmetic:
+       H = -sum(p_i * log2(p_i))  for all non-zero buckets
+  4. Result normalised to 0.0–1.0 scale (matching RanSMAP encoding)
+  5. Entropy value written to ring buffer alongside LBA, size, timestamp
+Why kernel-side: avoids raw buffer copy to userspace, reduces ring buffer bandwidth,
+and ensures entropy is computed for every write atomically with the event.
+1.3 BPF-LSM Programs — Enforcement
+BPF-LSM programs are loaded alongside the tracepoint programs but serve the enforcement role. They are triggered by kernel LSM hook points and can return -EPERM to deny an operation before it completes. Decisions to throttle or kill are written into a shared BPF hash map by the userspace AI model, and the LSM program reads this map on every hook invocation.
+LSM Hook
+Enforcement Action
+lsm/file_permission
+Throttle: if PID is in THROTTLE_MAP and write_count > rate_limit, return -EPERM to slow write throughput
+lsm/task_kill
+Gate: validate that signal delivery is from the S.H.I.E.L.D daemon UID before allowing SIGKILL
+lsm/bprm_check_security
+Snapshot: capture process image path and argv before any exec by monitored PIDs
+lsm/socket_connect
+Monitor: flag if a throttled process attempts outbound network connection (C2 communication indicator)
+1.4 BPF Ring Buffer and Data Transport
+All tracepoint events are written to a BPF ring buffer (not perf buffer — ring buffer has lower overhead and no per-CPU allocation waste). The ring buffer is memory-mapped by the userspace C++ feature engine, enabling zero-copy event delivery.
+Parameter
+Value and Rationale
+Ring buffer size
+64 MB — sized for peak I/O bursts during mass encryption without dropping events
+Event struct size
+~48 bytes per event (PID, PPID, timestamp_ns, LBA/GPA, size, entropy, op_type, comm[16])
+Throughput capacity
+~1.3 million events/sec at 64 MB ring buffer with 10ms poll interval
+Overflow handling
+BPF_RB_NO_WAKEUP on non-critical events; BPF_RB_FORCE_WAKEUP on ransom note detection — immediate wakeup
+CO-RE compatibility
+All programs use libbpf CO-RE (Compile Once, Run Everywhere) — no kernel header dependency at deployment
+1.5 Tamper Protection for Sensor Layer
+Sophisticated ransomware variants (notably LockBit derivatives) attempt to detect and disable monitoring tools. The following protections are applied to the sensor layer:
+BPF maps frozen after load using bpf_map_freeze() — no userspace process can write to detection maps after initialisation
+eBPF programs pinned to /sys/fs/bpf/shield/ — survives detector daemon restart
+Detector daemon runs under a dedicated UID (shield_daemon) with no write permissions to any filesystem path
+seccomp filter applied to detector daemon — restricts to only the syscalls required for ring buffer polling and map updates
+Watchdog process (separate cgroup, separate UID) monitors detector daemon liveness and restarts within 100ms if killed
+eBPF verifier log captured at load time and compared on each restart — detects program modification attempts
+1.6 Kernel Version Requirements
+Feature
+Minimum Kernel Version
+BPF ring buffer
+5.8
+BPF-LSM (CONFIG_BPF_LSM=y)
+5.7
+bpf_send_signal()
+5.3
+CO-RE (BTF support)
+5.2
+bpf_map_freeze()
+5.2
+Recommended minimum
+Ubuntu 22.04 LTS (kernel 5.15) or Ubuntu 24.04 LTS (kernel 6.8)
+MODULE 2
+C++ Feature Engineering Engine
+Real-time extraction of 32 behavioural features per process per 10-second window
+2.1 Purpose and Architecture
+The C++ feature engineering engine consumes raw events from the eBPF ring buffer and transforms them into 32-dimensional feature vectors, one per PID per 10-second sliding window. These feature vectors are the input to the AI model council. The engine maintains a per-PID circular buffer of events, computes features at each window boundary, and forwards completed feature vectors via a lock-free SPSC queue to the inference engine.
+2.2 Complete Feature Set (32 Features)
+Group 1 — Volume Features (4 features)
+Feature
+Formula / Description
+total_accesses
+Total number of storage I/O events (reads + writes) in the window
+total_bytes
+Sum of all write sizes in bytes
+mean_access_size
+Mean write size — ransomware writes uniform 4096-byte blocks
+std_access_size
+Standard deviation of write sizes — low std = robotic uniform writes
+Group 2 — Entropy Features — Original (5 features)
+Feature
+Formula / Description
+mean_entropy
+Mean Shannon entropy across all write operations (0–1 scale, RanSMAP encoding)
+std_entropy
+Standard deviation of entropy values — low = uniformly encrypted, high = mixed
+high_entropy_ratio
+Fraction of writes with entropy > 0.85 — fraction of encrypted-looking writes
+entropy_spike_count
+Count of writes with entropy > 0.90 — near-maximum entropy events
+max_entropy
+Maximum single-write entropy in the window
+Group 2 — Entropy Features — Dynamic (3 features)
+Feature
+Formula / Description
+entropy_trend
+mean_entropy(last third of window) - mean_entropy(first third) — positive = encryption progressing. Critical for Darkside detection.
+entropy_variance_blocks
+Standard deviation of per-block mean entropies (10 equal time blocks) — high variance = partial encryption phase (Darkside/Ryuk signature)
+peak_entropy_ratio
+Fraction of writes with entropy > 0.95 — more discriminative than high_entropy_ratio. Separates AES encryption from simple compression.
+Group 3 — Temporal Features — Original (5 features)
+Feature
+Formula / Description
+duration_sec
+Total execution window duration in seconds
+access_rate
+Total events / duration_sec — events per second
+inter_access_mean
+Mean of time differences between consecutive events — low mean = relentless I/O
+inter_access_std
+Standard deviation of inter-event times — low std = robotic, mechanical pacing
+burstiness
+std(inter_access) / mean(inter_access) — human activity is bursty (>1.0), ransomware is steady (<0.5)
+Group 3 — Temporal Features — Dynamic (1 feature)
+Feature
+Formula / Description
+io_acceleration
+access_rate(2nd half of window) - access_rate(1st half) — positive = ransomware accelerating into full encryption loop
+Group 4 — Spatial Features (3 features)
+Feature
+Formula / Description
+unique_blocks
+Number of unique LBA addresses accessed — high count = ransomware touching every block
+block_range
+max(LBA) - min(LBA) — wide range = full disk scan
+sequential_ratio
+Fraction of sorted LBA differences <= 8 — high ratio = sequential disk scan (ransomware scans linearly)
+Group 5 — Memory R/W Features (6 features)
+Feature
+Formula / Description
+write_count
+Total memory write events in window
+write_ratio
+Memory write events / total memory events
+rw_ratio
+Memory read count / memory write count — benign ~1.0, ransomware < 0.9
+write_entropy_mean
+Mean entropy of memory write operations
+high_entropy_write_ratio
+Fraction of memory writes with entropy > 0.85
+write_acceleration
+Fraction of writes in 2nd half - fraction in 1st half — positive = write phase growing
+Group 5 — Cross-Group and Derived Features (5 features)
+Feature
+Formula / Description
+write_size_uniformity
+Shannon entropy of write size distribution — low = all writes same size (ransomware) vs high = mixed sizes (benign)
+entropy_access_rate_ratio
+mean_entropy / log1p(access_rate) — normalises entropy by write speed. Catches slow ransomware (Darkside) that has moderate entropy at low rate.
+entropy_x_rate
+mean_entropy * access_rate — combined signal. LockBit: 4389, Ryuk: 721, Benign: 2481.
+entropy_rate
+mean_entropy * access_rate / duration_sec — entropy throughput per unit time
+write_entropy_volume
+write_entropy_mean * write_count — total encrypted write volume. Catches Ryuk which writes less volume but still crosses threshold.
+Group 6 — Ryuk and Darkside Targeted Features (3 features)
+These features were added specifically after EDA revealed that Ryuk (38% initial detection rate) and Darkside (44% initial detection rate) had feature profiles that overlapped with benign software. Each feature targets a specific aspect of their slow-encryption behaviour.
+Feature
+Formula / Description
+slow_high_entropy
+Binary flag: 1 if mean_entropy > 0.5 AND access_rate < 2000. Fires for 66.7% of Ryuk executions vs 7.3% of benign. Ryuk is slow (access_rate=1253) with moderate entropy.
+rw_ratio_deviation
+abs(rw_ratio - 1.0) — any deviation from balanced read/write is suspicious. Ryuk=0.123, Benign=0.057.
+write_entropy_volume
+write_entropy_mean * write_count — already listed above. Ryuk key feature.
+2.3 Window Management
+Parameter
+Value and Rationale
+Window duration
+60 seconds — sufficient for Ryuk Phase 1 (slow start) to reveal Phase 2 (full encryption)
+Step interval
+10 seconds — feature vector computed and sent to AI every 10 seconds
+Overlap
+50 seconds overlap between consecutive windows — ensures no event is missed at window boundaries
+Buffer per PID
+Circular deque, max 500,000 events — sized for peak ransomware I/O burst within one window
+PID lifecycle
+Buffer created on first event, destroyed after 300 seconds of inactivity or on SIGKILL confirmation
+Recency weighting
+Older events in window receive lower weight during feature computation — emphasises recent behaviour
+2.4 Scaling and Normalisation
+RobustScaler applied to all features before inference — uses median and IQR, immune to outliers (Zip compression, SDelete)
+Scaler fitted exclusively on confirmed benign executions from the original/ split of RanSMAP — no ransomware data contaminates the scaling parameters
+Scaler parameters serialised to /etc/shield/scaler.bin at deployment time — loaded into C++ inference engine as static lookup tables
+io_acceleration has extreme scale values (~10^12) due to nanosecond timestamps — RobustScaler collapses this to a normalised range without clipping
+Online recalibration: scaler is retrained every 30 days on the server's own confirmed benign process profiles to account for Linux-specific behavioural drift from the Windows RanSMAP training data
+MODULE 3
+AI Model Council — Hybrid Inference Engine
+Six unsupervised anomaly detectors fused with semi-supervised XGBoost
+3.1 Architecture Overview
+The AI model follows a two-stage hybrid architecture. Stage 1 is a council of six unsupervised anomaly detection models, each trained exclusively on benign data from the RanSMAP dataset. Stage 2 is a semi-supervised XGBoost classifier trained on pseudo-labels generated by the council. Their scores are combined in a weighted fusion to produce a single anomaly score between 0.0 and 1.0.
+The unsupervised core ensures the system can detect ransomware families it has never seen before. The XGBoost component learns the specific behavioural fingerprints of known families (especially Ryuk and Darkside) that the unsupervised models cannot reliably separate from benign activity.
+3.2 Stage 1 — Council of Six Unsupervised Models
+Model
+Input Features
+What It Catches
+Validation AUC
+IF Storage (Isolation Forest)
+Storage features only (21 features)
+Disk access pattern anomalies — entropy, LBA, block range
+0.9874
+IF Memory (Isolation Forest)
+Memory features only (8 features)
+Memory R/W ratio anomalies — write dominance, write acceleration
+0.9407
+IF Full (Isolation Forest)
+All 32 features (max_features=0.8)
+Combined storage + memory pattern anomalies
+0.9833
+HBOS (Histogram-Based Outlier Score)
+All 32 features
+Univariate outliers per feature — catches single-feature extremes
+0.9827
+LOF (Local Outlier Factor)
+All 32 features
+Density-based local outliers — catches Ryuk (sparse local density)
+0.9812
+IF Diverse (Isolation Forest)
+All 32 features (max_samples=128)
+Diversity via subsampling — different random seed and smaller subsample
+0.9741
+All six models are trained on benign-only data (480 benign executions from the original/ split, excluding Zip which was removed from training due to its high-entropy compression signature contaminating the benign boundary). ECOD and COPOD were evaluated and excluded — both produced AUC < 0.45 on this dataset, indicating their empirical-CDF and copula assumptions do not hold for the RanSMAP feature distribution.
+3.3 Score Normalisation and Weighted Fusion
+Each model produces a raw anomaly score on a different scale. A MinMaxScaler fitted on training scores normalises all six to the range [0, 1]. The final council score is a weighted sum determined by grid search on the validation set.
+Model
+Optimised Weight
+IF_storage
+0.05
+IF_memory
+0.05
+IF_full
+0.05
+HBOS
+0.30
+LOF
+0.40
+IF_diverse
+0.10
+Total
+1.00
+LOF and HBOS dominate the weights because they were most effective at separating Ryuk and Darkside from benign activity in the overlap region of the score distribution. The three Isolation Forests received low weights as individual models but contribute important diversity — each one uses different feature subsets and subsampling strategies.
+3.4 Stage 2 — Semi-Supervised XGBoost
+3.4.1 Pseudo-Label Generation
+XGBoost is trained on pseudo-labels derived from council scores rather than ground-truth labels. This enables it to learn the specific behavioural boundaries of Ryuk and Darkside without introducing supervised bias into the unsupervised detection layer.
+Pseudo-Label Rule
+Count
+Purpose
+council_score >= 0.35 → label = 1 (ransomware)
+878 pseudo-ransomware
+High-confidence ransomware — council agreement above threshold
+council_score <= 0.15 → label = 0 (benign)
+395 pseudo-benign
+High-confidence benign — all models agree
+0.15 < council_score < 0.35 → rejected
+527 rejected
+Uncertain region excluded to avoid noisy pseudo-labels
+Pseudo-label accuracy on known ground truth: 87.82%. The 12.18% error rate is acceptable because XGBoost will learn from the feature patterns, not from individual pseudo-label correctness.
+3.4.2 XGBoost Configuration
+Hyperparameter
+Value and Rationale
+n_estimators
+500 — sufficient depth for 32 features without overfitting
+max_depth
+4 — shallow trees to reduce overfitting on 1273 pseudo-labeled samples
+learning_rate
+0.05 — conservative learning rate for stable convergence
+subsample
+0.7 — row subsampling per tree for regularisation
+colsample_bytree
+0.7 — feature subsampling per tree for regularisation
+min_child_weight
+5 — minimum sum of hessian in a leaf, prevents overfitting on outliers
+scale_pos_weight
+benign_count / ransomware_count — handles class imbalance in pseudo-labels
+eval_metric
+logloss — probability calibration objective
+3.4.3 Top Feature Importances (SHAP)
+Rank
+Feature
+Mean |SHAP|
+Interpretation
+1
+mean_entropy
+1.812
+Master signal — encrypted data has near-random byte distribution
+2
+high_entropy_ratio
+1.246
+Fraction of writes that are high entropy — direct encryption indicator
+3
+entropy_trend
+0.528
+Entropy growing over time — encryption progressing. Key for Darkside.
+4
+write_entropy_volume
+0.287
+Total encrypted write volume — catches Ryuk despite low per-write entropy
+5
+peak_entropy_ratio
+0.246
+Near-maximum entropy fraction — separates AES from simple compression
+6
+high_entropy_write_ratio
+0.173
+Memory-layer entropy confirmation of storage-layer signal
+7
+entropy_access_rate_ratio
+0.105
+Entropy normalised by speed — catches slow encryptors
+8
+inter_access_std
+0.096
+I/O timing regularity — ransomware is robotic, benign is irregular
+3.5 Hybrid Score Fusion
+The final anomaly score combines the council score and XGBoost probability in a weighted sum. This weights the XGBoost component more heavily because it achieves higher recall on the Ryuk and Darkside families while the council provides coverage for unknown families.
+Hybrid Score Formula
+final_score = 0.4 * council_score + 0.6 * xgboost_probability
+  council_score:        Normalised weighted sum of 6 model scores (catches unknown families)
+  xgboost_probability:  P(ransomware) from XGBoost classifier (catches Ryuk/Darkside)
+Score range: 0.0 (clearly benign) to 1.0 (clearly ransomware)
+Base value (no features): -0.007 — model is neutral without evidence
+3.6 Final Model Performance
+Metric
+Score
+Validation F1
+0.9766
+Validation AUC
+0.9828
+Validation Precision
+0.9483
+Validation Recall
+0.9821
+Extra OOD Hardware F1
+0.9272
+Extra OOD Hardware AUC
+0.9259
+Mix Split (simultaneous execution) Detection
+89.00%
+Variants Split (unseen Conti variants) Detection
+85.71%
+Darkside Detection Rate
+98.33%
+Ryuk Detection Rate
+92.50%
+LockBit / AESCrypt / Conti / WannaCry / REvil
+100.00% each
+Firefox False Positive Rate
+0.00%
+SDelete False Positive Rate
+0.00%
+Office False Positive Rate
+1.67%
+3.7 Known Limitations and Mitigations
+Limitation
+Mitigation Implemented
+Ryuk 7.5% miss rate — slow encryptor, short windows miss early phase
+Sliding window with 60s duration and 10s step catches Ryuk Phase 3 within 3 window updates
+Idle process 28.33% false positive — system idle I/O resembles slow ransomware
+Adaptive threshold: during CPU idle > 90%, threshold raised 15%. Process-name context from eBPF comm field.
+Zip 100% false positive — compression produces high entropy identical to encryption
+Context-aware known-process registry: Zip is scored but response level determined by parent PID (cron/systemd = MEDIUM-only). Never skipped.
+Non-encrypting ransomware (data-destructive) — low entropy, not caught by entropy features
+Extended signal: mass deletion detector (unlink/rename syscall rate), file extension change detector, ransom note pattern detector
+Windows RanSMAP dataset on Linux deployment
+eBPF captures storage layer — OS-agnostic. Online scaler recalibration every 30 days on server's own benign profiles.
+MODULE 4
+Sliding Window Rank Analysis & LSM Response Engine
+Recency-weighted threat ranking and kernel-space enforcement
+4.1 Sliding Window Rank Analysis
+4.1.1 Purpose
+A single AI model score at one point in time is insufficient for reliable decision-making. Ransomware behaviour evolves over time — Ryuk in particular spends its first 30 seconds appearing nearly benign before entering its full encryption loop. The sliding window rank analysis accumulates multiple consecutive model scores per PID, applies recency weighting, and only escalates to enforcement after a sustained pattern is observed. This is the primary false positive reduction mechanism.
+4.1.2 Recency-Weighted Score Accumulation
+Sliding Window Rank Formula
+For each PID, maintain the last N score observations (N = window_duration / step = 60s / 10s = 6 observations):
+  rank_score = sum(weight_i * score_i)  for i in [0..5]
+  Weights (recency-weighted, sum = 1.0):
+    i=0 (oldest)  : weight = 0.05
+    i=1           : weight = 0.08
+    i=2           : weight = 0.12
+    i=3           : weight = 0.18
+    i=4           : weight = 0.25
+    i=5 (newest)  : weight = 0.32
+  This emphasises recent behaviour — if score drops, rank recovers quickly.
+  If score rises, rank escalates rapidly. Ryuk's acceleration is captured
+  by the jump in weight from i=2 to i=5.
+4.1.3 Decision Levels
+Rank Score Range
+Decision Level
+Action Triggered
+0.0 – 0.20
+BENIGN
+No action. Score logged. PID continues normally.
+0.20 – 0.35 (MEDIUM threshold)
+SUSPICIOUS
+Score logged with SUSPICIOUS flag. No enforcement yet. Analyst notified via dashboard.
+0.35 – 0.59 (MEDIUM threshold crossed)
+MEDIUM ALERT
+I/O throttle activated via BPF-LSM. Write rate limited to 10% of observed peak. Dashboard alert raised.
+0.59+ (HIGH threshold)
+HIGH ALERT
+SIGSTOP delivered via bpf_send_signal(). 10-second evaluation window begins. Dashboard critical alert.
+HIGH + sustained for 10s
+CONFIRMED THREAT
+SIGKILL via bpf_send_signal(). Forensic snapshot captured. CERT-IN report generated.
+4.1.4 Throttle → Suspend → Kill Sequence
+This three-gate sequence is the core false positive safety mechanism. It ensures that no process is terminated without passing through two reversible enforcement stages first.
+MEDIUM alert triggered: BPF-LSM lsm/file_permission hook begins rate-limiting write syscalls for the flagged PID. Write throughput capped at 10% of the peak rate observed in the last window. The process continues running — only I/O is throttled. Legitimate processes (e.g., a slow backup job that briefly resembles ransomware) will stop escalating because their write pattern becomes irregular once throttled.
+If rank_score continues rising above HIGH threshold while throttled: bpf_send_signal(SIGSTOP) delivered from kernel space. Process is suspended but not killed. All file handles remain open. A 10-second evaluation window begins.
+During the 10-second suspension: the AI model rescores the PID using the most recent feature vector. If rank_score drops below MEDIUM during suspension — the process is resumed with SIGCONT. False positive avoided. If rank_score remains HIGH: SIGKILL delivered via bpf_send_signal(). Forensic snapshot begins immediately.
+4.2 Top-10 Process Ranking
+At all times, the system maintains a ranked list of the top 10 most suspicious processes by current rank_score. This ranking is pushed to the dashboard every 5 seconds and enables analysts to monitor the threat landscape without waiting for a formal alert.
+Dashboard Field per Process
+Source
+PID and process name (comm)
+eBPF event comm field
+Current rank_score (0.0–1.0)
+Sliding window rank computation
+Current decision level (BENIGN/SUSPICIOUS/MEDIUM/HIGH)
+Threshold comparison
+Read count (window)
+Feature engineering — read_count
+Write count (window)
+Feature engineering — write_count
+Mean entropy (window)
+Feature engineering — mean_entropy
+High entropy ratio (window)
+Feature engineering — high_entropy_ratio
+Read-to-write ratio (window)
+Feature engineering — rw_ratio
+Entropy trend (window)
+Feature engineering — entropy_trend
+io_acceleration (window)
+Feature engineering — io_acceleration
+write_entropy_volume (window)
+Feature engineering — write_entropy_volume
+SHAP top feature attribution
+XGBoost SHAP values — top 3 features driving the score
+4.3 Extended Ransomware Signals
+Beyond entropy-based detection, the sliding window also accumulates signals from the extended eBPF probes targeting non-encrypting ransomware:
+Signal
+Threshold
+Contribution to Rank Score
+mass_deletion_score
+unlink/rename rate > 50 events/sec
++0.4 added to rank_score immediately
+extension_change_score
+Any known ransomware extension detected in rename event
++0.6 added to rank_score — near-immediate HIGH
+ransom_note_score
+File created matching ransom note pattern (readme/decrypt/recover)
+rank_score set to 1.0 — immediate HIGH alert regardless of entropy
+network_c2_flag
+Outbound connection from throttled PID
++0.3 added to rank_score — C2 communication during encryption is strong indicator
+MODULE 5
+Forensic Snapshot & CERT-IN Report Generation
+Post-detection evidence collection and professional incident report generation
+5.1 Forensic Snapshot
+Immediately upon SIGKILL delivery, before the process address space is released, the forensic snapshot engine captures the following evidence. This happens in a dedicated high-priority thread to ensure nothing is missed in the window between SIGKILL and process exit.
+Evidence Category
+Collection Method
+Data Captured
+Process image
+/proc/PID/exe (symlink)
+Full path to executable, inode, SHA-256 hash
+Command line
+/proc/PID/cmdline
+Full argument list including any ransomware configuration flags
+Memory maps
+/proc/PID/maps
+All mapped regions including shared libraries, heap, stack layout
+Open file descriptors
+/proc/PID/fd/*
+All files open at time of kill — shows which files were being encrypted
+Process tree
+/proc/PID/status (PPid field)
+Full parent chain from PID to init — shows how ransomware was launched
+Network connections
+/proc/PID/net/tcp + tcp6
+All open sockets — identifies C2 IP addresses and ports
+I/O statistics
+/proc/PID/io
+Kernel-reported read_bytes, write_bytes, cancelled_write_bytes
+cgroup membership
+/proc/PID/cgroup
+Identifies container context if running inside Docker/Kubernetes
+eBPF event log
+BPF ring buffer snapshot
+Last 10,000 raw events for the PID — complete I/O trace
+SHAP attribution
+XGBoost explainer output
+Per-feature SHAP values showing exactly why the score was raised
+Sliding window history
+In-memory rank log
+All rank_scores for the last 60 seconds with timestamps
+5.2 CERT-IN Incident Report Format
+Every confirmed ransomware detection produces a structured incident report following CERT-IN (Indian Computer Emergency Response Team) reporting guidelines. The report is generated in both JSON (for machine consumption) and PDF (for human review) formats.
+5.2.1 Report Sections
+Section
+Content
+1. Incident Header
+Unique Incident ID (UUID4), detection timestamp (UTC), severity level (CRITICAL/HIGH/MEDIUM), affected system hostname, system IP addresses, OS version, kernel version
+2. Executive Summary
+Single-paragraph human-readable summary of what was detected, which ransomware family (if identified), what files were impacted, and what action was taken
+3. Affected System Details
+Hostname, IP, OS, kernel, CPU model, RAM, uptime at time of detection, cgroup context, container ID if applicable
+4. Indicators of Compromise (IOC)
+Process name, PID, executable path, SHA-256 hash, parent process chain, command line arguments, open file paths at detection, network connections (IP:port), file extensions being written
+5. MITRE ATT&CK Mapping
+Technique IDs mapped from SHAP features: T1486 (Data Encrypted for Impact), T1083 (File and Directory Discovery), T1070.004 (File Deletion), T1071 (Application Layer Protocol for C2 if network flag set)
+6. Detection Evidence
+Anomaly score timeline (rank_score over 60 seconds), SHAP waterfall plot (top 15 feature contributions), per-feature values at time of detection, AI model council individual scores
+7. Forensic Artifacts
+SHA-256 of process executable, list of open file descriptors, memory map summary, I/O statistics from /proc, full eBPF event log (compressed), process tree
+8. Response Actions Taken
+Timeline: throttle applied at T+Xs, SIGSTOP at T+Ys, SIGKILL at T+Zs. Confirmation of process termination. Post-kill system state.
+9. Recommended Remediation
+1) Isolate affected system from network immediately. 2) Identify and restore encrypted files from last clean backup. 3) Audit process launch mechanism (cron, systemd, user login). 4) Submit IOCs to CERT-IN portal. 5) Preserve forensic snapshot before any system changes.
+10. Report Metadata
+Report generation timestamp, S.H.I.E.L.D version, model version, detection threshold values, report format version
+5.2.2 MITRE ATT&CK Feature-to-Technique Mapping
+SHAP Feature Triggered
+MITRE ATT&CK Technique
+ID
+high_entropy_ratio + mean_entropy (primary)
+Data Encrypted for Impact
+T1486
+unique_blocks + block_range + sequential_ratio
+File and Directory Discovery
+T1083
+mass_deletion_score (unlink rate)
+Data Destruction / Indicator Removal: File Deletion
+T1070.004 / T1485
+extension_change_score (rename to .locked)
+Data Encrypted for Impact (with extension change)
+T1486
+ransom_note_score (README creation)
+Data Encrypted for Impact (ransom note)
+T1486
+network_c2_flag (outbound connection)
+Application Layer Protocol / Exfiltration
+T1071 / T1041
+io_acceleration + access_rate (speed)
+Resource Hijacking / Execution
+T1496
+MODULE 6
+Read-Only Security Dashboard
+Push-only WebSocket, TLS mutual authentication, real-time monitoring interface
+6.1 Security Architecture
+The dashboard is a read-only monitoring interface. It receives data from the S.H.I.E.L.D backend exclusively via a push-only WebSocket connection. The server never reads incoming messages from the client. Any incoming message from the client side results in immediate connection termination. This design ensures the dashboard cannot be used as an attack vector to influence detection decisions or system state.
+Security Property
+Implementation
+Transport encryption
+TLS 1.3 — no fallback to older versions
+Authentication
+Mutual TLS (mTLS) — both server and client present certificates. Only clients with a valid S.H.I.E.L.D-issued client certificate can connect.
+Message direction
+Server-to-client only. WebSocket onmessage handler on the server side: immediately close connection if any frame received from client.
+No REST API
+No HTTP endpoints that accept POST/PUT/DELETE. Only GET for static assets and WebSocket upgrade.
+Encrypted payload
+All WebSocket messages encrypted at application layer (AES-256-GCM) in addition to TLS — defence in depth
+Report download
+PDF/JSON reports served via one-time signed URLs (HMAC-SHA256, 5-minute expiry). URL cannot be reused.
+Session management
+No cookies, no localStorage. Client certificate is the only authentication credential.
+Network isolation
+Dashboard server binds only to localhost or a dedicated management VLAN interface — not the production network interface.
+6.2 WebSocket Push Protocol
+Event Type
+Push Frequency
+Payload
+top10_update
+Every 5 seconds
+Ranked list of top 10 PIDs with all metrics (rank_score, read/write counts, entropy, rw_ratio, SHAP top features)
+alert_new
+On alert creation
+Alert ID, PID, process name, decision level, rank_score, timestamp, SHAP top 3 features
+alert_update
+On alert state change
+Alert ID, previous level, new level, timestamp, triggering score
+system_metrics
+Every 10 seconds
+Total processes monitored, total alerts today, false positive rate (24h), model version
+kill_confirmed
+On process termination
+PID, process name, final score, report ID, download URL (signed, 5-min expiry)
+heartbeat
+Every 30 seconds
+Server timestamp, uptime, ring buffer fill percentage, event processing rate
+6.3 Dashboard Pages
+Page 1 — Live Threat Overview (Home / Default Page)
+This is the primary operational page. It is the first screen analysts see and provides a full real-time view of the current threat landscape.
+UI Component
+Content and Behaviour
+System Status Bar (top)
+Green/Amber/Red status indicator, total PIDs monitored, active alerts count, model version, last heartbeat timestamp, ring buffer utilisation percentage
+Active Alerts Panel (left column)
+Real-time list of all MEDIUM and HIGH alerts currently active. Each entry shows: PID, process name, decision level badge (colour-coded), rank_score as a progress bar, time since first alert, SHAP top feature. Clicking an entry opens the Process Detail modal.
+Top 10 Suspicious Processes Table (center)
+Live-updating table ranked by rank_score. Columns: Rank, PID, Process Name, Rank Score (bar), Decision Level, Read Count, Write Count, Mean Entropy, High Entropy Ratio, R/W Ratio, Entropy Trend, io_acceleration, write_entropy_volume, SHAP Primary Feature. Refreshes every 5 seconds via WebSocket push.
+Sliding Window Rank Chart (right column)
+Line chart showing rank_score over the last 60 seconds for the currently selected PID. X-axis: time. Y-axis: 0.0–1.0. Three horizontal reference lines at SUSPICIOUS (0.20), MEDIUM (0.35), HIGH (0.59). Score plotted as a continuous line with fill gradient (green → amber → red based on zone).
+Global Entropy Heatmap (bottom)
+Grid of all monitored PIDs. Cell colour: blue (low entropy) to red (high entropy) based on current mean_entropy. Allows instant visual identification of processes writing encrypted data.
+Page 2 — Process Detail View
+Accessible by clicking any process in the Top 10 table or Active Alerts panel. Shows the complete profile of one specific process.
+UI Component
+Content and Behaviour
+Process Header
+PID, process name (comm), executable path, parent PID and name, start time, current CPU and memory usage, cgroup membership
+Rank Score Timeline
+Full 60-second sliding window rank chart with all 6 window observations plotted individually. Shows the recency-weighted rank_score as the combined line and individual model scores as separate lighter lines.
+Feature Vector Table
+All 32 features with current value, min/max/mean from benign baseline, and deviation indicator (normal / elevated / critical). Colour-coded cells.
+SHAP Waterfall Plot
+Visual SHAP waterfall showing which features are pushing the score toward ransomware (red bars, positive SHAP) or toward benign (blue bars, negative SHAP). Based on the most recent inference.
+Council Model Scores
+Six individual normalised scores from IF_storage, IF_memory, IF_full, HBOS, LOF, IF_diverse displayed as a radar chart. Shows which models are agreeing vs disagreeing.
+I/O Event Timeline
+Scrollable timeline of the last 1000 eBPF events for this PID. Columns: timestamp, operation (read/write/rename/unlink), LBA/GPA, size, entropy. Entropy value colour-coded (blue = low, red = high).
+Enforcement History
+Log of all enforcement actions: throttle applied/released, SIGSTOP sent, SIGCONT sent, SIGKILL sent. Each with timestamp and triggering rank_score.
+Related Processes
+Parent and child processes of the current PID. Any that are also showing elevated scores are highlighted.
+Page 3 — Alert History
+Complete historical log of all alerts generated since the system was deployed or last cleared.
+UI Component
+Content and Behaviour
+Filters Bar
+Filter by: date range, decision level (MEDIUM/HIGH/CONFIRMED), process name, disposition (active/resolved/false positive confirmed). Search box for PID or process name.
+Alert Table
+Columns: Alert ID, Timestamp, PID, Process Name, Peak Level, Peak Score, Duration (from first MEDIUM to SIGKILL or resolution), Outcome (Killed / False Positive / Resolved), Report Available (download icon if report exists).
+Alert Detail Sidebar
+Clicking any alert row shows a sidebar with: full rank_score timeline, enforcement action log, SHAP attribution summary, quick link to full report download.
+False Positive Tracking
+Each resolved alert can be marked as False Positive by the analyst. This information is logged for model retraining and threshold calibration. The system tracks 24-hour and 7-day false positive rates prominently.
+Export
+Export filtered alert history as CSV. No JSON export of raw events (only summary data).
+Page 4 — Incident Reports
+Repository of all generated CERT-IN incident reports for confirmed ransomware detections.
+UI Component
+Content and Behaviour
+Report List
+Table of all generated reports. Columns: Report ID, Incident ID, Timestamp, Ransomware Family (if identified), Affected PID, Severity, MITRE Techniques. Sorted by timestamp descending.
+Report Preview
+Clicking a report shows an inline HTML preview of the full CERT-IN report including all sections, SHAP waterfall, score timeline chart, and IOC list.
+Download Options
+Two download buttons per report: (1) PDF — formatted CERT-IN report. (2) JSON — machine-readable report for CERT-IN portal submission or SIEM integration. Downloads served via signed one-time URLs (HMAC-SHA256, 5-minute expiry). URL is generated fresh on each click.
+MITRE ATT&CK Navigator Export
+Button to export all IOCs and technique mappings as a MITRE ATT&CK Navigator layer JSON file. Allows overlay on the ATT&CK matrix for threat intelligence reporting.
+Forensic Archive Download
+For each report, a separate button downloads the compressed forensic archive: eBPF event log, /proc snapshots, memory maps, open file descriptors. Requires a separate analyst-level client certificate for this download (two-tier mTLS).
+Page 5 — System Health & Model Metrics
+Operational health monitoring for the S.H.I.E.L.D system itself, not the protected workloads.
+UI Component
+Content and Behaviour
+eBPF Sensor Health
+Ring buffer fill percentage (gauge), events/sec processed (line chart, last 1 hour), events dropped (should be 0 — non-zero indicates performance issue), eBPF program load status for each probe (green = loaded, red = unloaded/error)
+Feature Engine Health
+Feature vectors computed/sec, mean latency from event to feature vector (should be < 50ms), PID count currently tracked, memory usage of per-PID circular buffers
+Inference Engine Health
+Inferences/sec, mean inference latency (should be < 10ms), council model status (each of 6 models: loaded/error), XGBoost model version and load time
+Model Performance Metrics
+Live false positive rate (last 24h), live false negative rate (last 24h, based on analyst-confirmed FP/FN feedback), rolling AUC estimate, threshold values in effect (MEDIUM/HIGH/CRITICAL)
+Tamper Detection Log
+Log of any detected tampering attempts: eBPF map write attempts from unauthorised UID, detector daemon kill attempts, /sys/fs/bpf/ modification attempts, seccomp violation events
+Scaler Recalibration Status
+Last recalibration timestamp, next scheduled recalibration, number of benign samples in recalibration buffer, drift metric (mean feature deviation from original training baseline)
+6.4 Frontend Technology Requirements
+Requirement
+Specification
+Framework
+React 18+ with TypeScript — strict mode enabled. No class components.
+State management
+Zustand for WebSocket message state. React Query for any static data fetching. No Redux (unnecessary complexity for read-only dashboard).
+WebSocket client
+Native browser WebSocket API. Reconnects automatically with exponential backoff. Displays connection status in header at all times.
+Charts
+Recharts for line charts (rank score timeline, system metrics). D3.js for the SHAP waterfall and global entropy heatmap. No Chart.js (insufficient for custom SHAP visualization).
+Tables
+TanStack Table (React Table v8) for virtualized large tables. Required for I/O event timeline (1000+ rows).
+Styling
+Tailwind CSS. Dark theme only — dashboard is used in SOC environments with reduced ambient light. No light mode toggle required.
+No localStorage / sessionStorage
+Client certificate is the only session state. No sensitive data persisted in browser storage.
+Report preview rendering
+React-PDF for inline PDF preview. Avoids opening new browser tabs (security policy).
+Accessibility
+WCAG 2.1 AA compliance. All alert badges have text labels in addition to colour coding. Keyboard navigation for all tables and panels.
+Performance
+All WebSocket message processing in Web Workers — UI thread never blocks on data processing. Virtual scrolling on all tables > 50 rows.
+7. Zero Trust Architecture and Known-Process Registry
+S.H.I.E.L.D operates under a strict zero-trust philosophy. Traditional whitelists — where a process is identified as trusted and its I/O is not scored — are explicitly rejected. Ransomware can and does masquerade as legitimate process names. Skipping scoring for any process creates a blind spot that a sophisticated attacker will exploit.
+However, zero trust does not mean zero context. The Known-Process Registry provides context-aware response calibration without bypassing detection. Every process is scored. The registry influences what response level is triggered, never whether scoring occurs.
+7.1 Known-Process Registry Design
+Process Category
+Detection Behaviour
+Response Calibration
+Compression utilities (zip, gzip, 7z, tar, zstd)
+Fully scored — all 32 features computed and inferred normally
+If score > MEDIUM: check parent PID. If parent = cron/systemd/rsync → cap response at MEDIUM (no kill). If parent = unknown/bash/user → full response.
+Database backup tools (mysqldump, pg_dump, mongodump)
+Fully scored — database dumps produce high write entropy
+If score > MEDIUM: check invocation time. Scheduled window (cron) → MEDIUM-only. Interactive session during business hours → full response.
+Antivirus / security scanners (ClamAV, rkhunter)
+Fully scored — scanners do mass file reads that trigger spatial features
+If score > MEDIUM: check that process is reading only, not writing. Read-only operations with high spatial score → MEDIUM-only.
+Package managers (apt, dpkg, pip)
+Fully scored
+Package manager operations are expected to write to /usr, /lib paths. If writes are outside expected paths → full response regardless of registry.
+All other processes
+Fully scored
+Full response based on rank_score thresholds. No calibration.
+Key Principle
+The Known-Process Registry answers: given that this process is flagged,
+what is the appropriate response?
+It does NOT answer: should this process be scored?
+Every process is always scored. No exceptions.
+The registry is context, not trust.
+7.2 Why Traditional Whitelists Are Rejected
+Ransomware process name spoofing: any process can be named 'zip' or 'gzip'. A whitelist based on comm name is trivially bypassed.
+Supply chain attacks: a compromised legitimate binary (e.g., a backdoored version of gzip) would be permanently exempt from detection.
+Privilege escalation: a ransomware process that spawns a whitelisted child process to do the actual encryption would evade detection entirely.
+Zero trust definition: trust expires by default. Continuous verification is required. A whitelist is the opposite of continuous verification.
+8. Tamper Protection Architecture
+Sophisticated ransomware variants including LockBit derivatives actively probe their environment for monitoring tools and attempt to disable them before beginning encryption. S.H.I.E.L.D implements a layered tamper protection architecture.
+8.1 Protection Layers
+Layer
+Mechanism
+Protects Against
+eBPF map immutability
+bpf_map_freeze() called immediately after all maps are populated at load time. Any write attempt to a frozen map returns -EPERM.
+Ransomware writing to detection maps to modify scoring thresholds or whitelist itself
+Program pinning
+All eBPF programs pinned to /sys/fs/bpf/shield/. Programs survive detector daemon restart without reloading.
+Detector daemon kill attempts — programs continue running in kernel even if userspace is down
+Dedicated UID isolation
+Detector daemon runs as shield_daemon (UID 65432). No write permissions to any filesystem path. No capability beyond CAP_BPF and CAP_PERFMON.
+Privilege escalation attempts targeting the detector process
+seccomp filter
+Strict seccomp allowlist applied to detector daemon. Only: read, write, poll, epoll_wait, bpf (map update only), close, exit_group permitted.
+Ransomware using ptrace or execve to hijack the detector process
+Watchdog process
+Separate process in separate cgroup (shield_watchdog, UID 65433). Monitors detector daemon PID liveness. Restarts within 100ms if killed.
+Direct process termination of the detector daemon
+Read-only memory mapping
+AI model weights loaded into read-only mmap region (PROT_READ only). No process can modify model parameters at runtime.
+In-memory model parameter tampering to disable ransomware detection
+eBPF verifier log comparison
+Verifier log captured at initial load. Hash compared on each watchdog-triggered restart. Mismatch triggers CRITICAL alert.
+eBPF program replacement with a modified version
+Self-monitoring
+The eBPF sensor layer monitors its own process (shield_daemon PID) for any SIGKILL or ptrace attachment attempts. Attempting to kill the detector triggers an immediate alert.
+Targeted attacks against the detection system itself
+9. Deployment Requirements
+9.1 System Requirements
+Requirement
+Specification
+Operating System
+Ubuntu Server 20.04 LTS (kernel 5.4+), 22.04 LTS (kernel 5.15, recommended), or 24.04 LTS (kernel 6.8)
+Kernel configuration
+CONFIG_BPF_LSM=y, CONFIG_DEBUG_INFO_BTF=y, CONFIG_BPF_SYSCALL=y, CONFIG_PERF_EVENTS=y
+CPU
+x86_64, minimum 2 cores (4 recommended — one dedicated to feature engine, one to inference)
+RAM
+Minimum 4 GB (8 GB recommended — per-PID circular buffers can reach 2 GB during mass encryption events)
+Disk
+100 MB for S.H.I.E.L.D binaries and model weights. Variable for forensic archives — recommend dedicated /var/shield/forensics with 50 GB minimum.
+Python
+Python 3.10+ for inference engine (scikit-learn, xgboost, shap, joblib)
+C++ toolchain
+GCC 11+ or Clang 13+ with libbpf 1.0+ for eBPF program compilation
+Node.js
+18 LTS for dashboard backend (WebSocket server)
+Certificates
+Internal CA required for mTLS. Minimum 4096-bit RSA or P-384 ECDSA.
+9.2 Deployment Steps
+Verify kernel configuration: uname -r (>= 5.15 recommended), cat /boot/config-$(uname -r) | grep BPF_LSM (must be y)
+Install dependencies: libbpf-dev, clang, python3-pip, nodejs 18 LTS
+Compile eBPF programs: clang -O2 -target bpf -D__TARGET_ARCH_x86 -I/usr/include/bpf -c shield_sensors.bpf.c -o shield_sensors.bpf.o
+Generate BTF skeleton: bpftool gen skeleton shield_sensors.bpf.o > shield_sensors.skel.h
+Compile C++ feature engine and inference harness: cmake -DCMAKE_BUILD_TYPE=Release .. && make -j4
+Install Python model dependencies: pip3 install scikit-learn xgboost shap joblib pyod
+Load model artifacts: cp council_v3.pkl final_hybrid_v2.pkl scaler.pkl /etc/shield/models/
+Create system users: useradd --system --no-create-home shield_daemon && useradd --system --no-create-home shield_watchdog
+Generate mTLS certificates: issue server cert for dashboard, issue client cert for each analyst workstation
+Install and start systemd services: shield-sensors.service, shield-features.service, shield-inference.service, shield-watchdog.service, shield-dashboard.service
+Verify deployment: shield-cli status (all 5 services green), shield-cli test-inject (synthetic ransomware pattern should trigger MEDIUM within 30 seconds)
+Appendix A — Ransomware Family Detection Rates
+Family
+Detection Rate
+Mean Hybrid Score
+Primary Detection Features
+LockBit
+100%
+0.749
+mean_entropy (+1.96), high_entropy_ratio (+1.25), io_acceleration (+3.3e13)
+AESCrypt
+100%
+0.769
+mean_entropy (+1.95), high_entropy_ratio (+1.27), peak_entropy_ratio (+0.26)
+Conti
+100%
+0.742
+mean_entropy (+1.94), high_entropy_ratio (+1.24), entropy_trend (+0.52)
+WannaCry
+100%
+0.744
+mean_entropy (+1.89), high_entropy_ratio (+1.31), write_entropy_volume (+0.31)
+REvil
+100%
+0.709
+mean_entropy (+1.81), high_entropy_ratio (+1.15), entropy_trend (+0.48)
+Darkside
+98.33%
+0.562
+mean_entropy (+1.47), entropy_trend (+0.37), entropy_access_rate_ratio (+0.21)
+Ryuk
+92.50%
+0.541
+mean_entropy (+1.86), high_entropy_ratio (+1.27), slow_high_entropy (+0.44)
+Conti_01 to Conti_07 (variants)
+85.71%
+0.423
+entropy_trend (+0.28), mean_entropy (+1.12) — variants have lower entropy than base Conti
+Appendix B — False Positive Rates (Benign Processes)
+Benign Process
+False Positive Rate
+Notes and Mitigation
+Firefox
+0.00%
+Normal browser I/O — low entropy, irregular access pattern. No false positives.
+Idle (system idle process)
+28.33%
+System background I/O occasionally resembles slow ransomware. Mitigated by CPU idle threshold calibration in adaptive threshold engine.
+Office (Microsoft Office equivalent)
+1.67%
+Encrypted document formats produce occasional high-entropy writes. Acceptable rate for production.
+SDelete (secure deletion tool)
+0.00%
+Included in training data. Model correctly learned its entropy pattern as benign despite aggressive deletion behaviour.
+Zip (compression)
+100%
+Excluded from training to prevent contamination of benign boundary. Compression entropy is indistinguishable from encryption entropy at the storage layer. Managed via Known-Process Registry — parent PID context determines response level.
+Appendix C — Glossary
+Term
+Definition
+eBPF
+Extended Berkeley Packet Filter — kernel virtual machine allowing safe, verifiable programs to run in kernel space without kernel module compilation
+BPF-LSM
+BPF programs attached to Linux Security Module hook points — can enforce access control decisions from kernel space
+CO-RE
+Compile Once, Run Everywhere — libbpf feature enabling eBPF programs to run on different kernel versions without recompilation
+RanSMAP
+Ransomware Storage and Memory Access Patterns — open dataset of low-level I/O patterns collected via hypervisor from 7 ransomware families and 5 benign applications
+Isolation Forest
+Unsupervised anomaly detection algorithm that isolates outliers by randomly partitioning feature space. Trained on benign data only.
+HBOS
+Histogram-Based Outlier Score — univariate outlier detector that builds per-feature histograms from training data
+LOF
+Local Outlier Factor — density-based anomaly detector comparing local density of a point to its neighbours
+SHAP
+SHapley Additive exPlanations — game-theory-based framework for explaining individual model predictions by computing feature contributions
+CERT-IN
+Indian Computer Emergency Response Team — national nodal agency for cybersecurity incident response. Defines standard formats for incident reporting.
+MITRE ATT&CK
+Adversarial Tactics, Techniques, and Common Knowledge — knowledge base of adversary behaviour used for threat intelligence and detection mapping
+mTLS
+Mutual Transport Layer Security — both client and server authenticate each other with certificates
+Pseudo-labels
+Labels generated by one model (council) and used to train a second model (XGBoost) — enables semi-supervised learning without ground-truth attack labels
+Sliding window rank
+Recency-weighted accumulation of multiple consecutive model scores per process — reduces false positives from transient score spikes
+bpf_send_signal()
+Kernel BPF helper function that sends a Unix signal to a process from kernel space — eliminates userspace latency in the kill path
