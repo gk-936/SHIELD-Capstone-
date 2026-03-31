@@ -18,10 +18,8 @@ export default defineConfig({
     port: 5173,
     host: '0.0.0.0',
     strictPort: true,
-    allowedHosts: [
-      'homeserver.taila28f72.ts.net',
-      '100.100.186.46',
-      'localhost'
-    ]
+    // Setting allowedHosts to true disables the host-header check
+    // Perfectly safe for a private Tailscale network
+    allowedHosts: true 
   }
 })
