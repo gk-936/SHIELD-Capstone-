@@ -1,4 +1,5 @@
 CLANG ?= clang
+CXX ?= clang++
 BPFTOOL ?= bpftool
 
 ARCH := $(shell uname -m | sed 's/x86_64/x86/')
@@ -24,9 +25,9 @@ $(BPF_OBJ): bpf/shield_sensors.bpf.c bpf/common.h vmlinux.h
 $(BPF_SKEL): $(BPF_OBJ)
 	$(BPFTOOL) gen skeleton $< > $@
 
-# Compile Userspace Daemon
+# Compile Userspace Daemon (Using C++ compiler for linking stdlib)
 $(DAEMON_EXE): $(DAEMON_SRC) $(BPF_SKEL)
-	$(CLANG) -g -O2 -Wall $(INCLUDES) $(DAEMON_SRC) -lbpf -lelf -lz -o $@
+	$(CXX) -g -O2 -Wall $(INCLUDES) $(DAEMON_SRC) -lbpf -lelf -lz -o $@
 
 clean:
 	rm -f $(BPF_OBJ) $(BPF_SKEL) $(DAEMON_EXE) vmlinux.h
