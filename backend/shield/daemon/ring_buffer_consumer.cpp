@@ -11,6 +11,8 @@
 #include <deque>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <algorithm>
 #include <bpf/libbpf.h>
 
 namespace shield {
@@ -84,7 +86,26 @@ public:
     }
 
 private:
+    bool IsKernelProcess(uint32_t pid, const char* comm) {
+        if (pid < 1000) return true; // System processes/daemons
+        std::string name(comm);
+        // Common kernel processes that exhibit high I/O or entropy-like behavior
+        if (name.find("kworker") == 0) return true;
+        if (name.find("jbd2") == 0) return true;
+        if (name.find("ext4-rsv-conver") == 0) return true;
+        if (name.find("cpuhp/") == 0) return true;
+        if (name.find("migration/") == 0) return true;
+        if (name.find("rcu_preempt") == 0) return true;
+        if (name == "systemd-journal") return true;
+        return false;
+    }
+
     void HandleThreat(uint32_t pid, int level, const char* comm) {
+        if (IsKernelProcess(pid, comm)) {
+            // Silently drop alerts for kernel processes to reduce noise
+            return;
+        }
+
         if (level == 2) {
             std::cout << "[🛡️ SHIELD] RANSOMWARE ALERT (PID " << pid << ", " << comm << "): High threat score! Intercepting..." << std::endl;
         } else if (level == 1) {
