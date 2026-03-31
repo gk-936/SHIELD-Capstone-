@@ -16,28 +16,6 @@ namespace shield {
 FeatureEngine g_engine;
 extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel);
 
-static pid_t g_dashboard_pid = -1;
-
-void start_dashboard() {
-    g_dashboard_pid = fork();
-    if (g_dashboard_pid == 0) {
-        // Child: Change directory to project root for correct config loading
-        std::cout << "[🛡️] Launching S.H.I.E.L.D. Dashboard (Vite)..." << std::endl;
-        
-        // Move from backend/shield/ to project root (../..)
-        if (chdir("../..") != 0) {
-            std::cerr << "[🛡️] Failed to reach project root." << std::endl;
-            exit(1);
-        }
-
-        // Launch standard Vite via npm (now finds root vite.config.js)
-        execlp("npm", "npm", "run", "dev", "--", "--host", NULL);
-        
-        std::cerr << "[🛡️] Failed to start dashboard. Is npm installed?" << std::endl;
-        exit(1);
-    }
-}
-
 static volatile bool exiting = false;
 
 static void sig_handler(int sig) {
@@ -85,11 +63,8 @@ int main(int argc, char **argv) {
     printf("S.H.I.E.L.D Sensor Layer Loaded Successfully.\n");
     printf("Intercepting storage and memory events...\n");
 
-    /* Start Dashboard Bridge */
+    /* Start Dashboard Bridge (Telemetry Push) */
     shield::g_dashboard.Start();
-
-    /* Start Dashboard Frontend */
-    start_dashboard();
 
     /* Initialize Ring Buffer Consumption */
     err = handle_ring_buffer(skel);
@@ -99,6 +74,7 @@ int main(int argc, char **argv) {
     }
 
 cleanup:
+    shield::g_dashboard.Stop();
     shield_sensors_bpf__destroy(skel);
     return err < 0 ? -err : 0;
 }
