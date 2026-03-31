@@ -70,7 +70,9 @@ export const useAppStore = create<AppStore>((set, get) => {
       if (ws) return;
 
       console.log("[🛡️] Connecting to S.H.I.E.L.D. Daemon...");
-      ws = new WebSocket('ws://localhost:8080');
+      // Using Tailscale IP for robust cross-machine connectivity
+      const vmIp = '100.100.186.46';
+      ws = new WebSocket(`ws://${vmIp}:8080`);
 
       ws.onopen = () => {
         set({ connectionStatus: { connected: true, lastHeartbeat: Date.now() } });
