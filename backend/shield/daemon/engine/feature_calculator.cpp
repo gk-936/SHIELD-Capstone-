@@ -36,7 +36,7 @@ FeatureVector FeatureEngine::calculate_features(uint32_t pid, const PIDBuffer &b
     std::vector<double> entropies;
     
     for (const auto &e : win_events) {
-        if (e.op_type == OP_WRITE) {
+        if (e.op_type == SHIELD_OP_WRITE) {
             total_bytes += e.size;
             write_sizes.push_back((double)e.size);
             entropies.push_back((double)e.entropy / 1000.0);
@@ -123,8 +123,8 @@ FeatureVector FeatureEngine::calculate_features(uint32_t pid, const PIDBuffer &b
     /* 5. Memory attributes */
     double mem_writes = 0, mem_reads = 0;
     for(const auto& e : win_events) {
-        if(e.op_type == OP_WRITE) mem_writes++;
-        if(e.op_type == OP_READ) mem_reads++;
+        if(e.op_type == SHIELD_OP_WRITE) mem_writes++;
+        if(e.op_type == SHIELD_OP_READ) mem_reads++;
     }
     fv.features[FeatureVector::WRITE_COUNT] = mem_writes;
     fv.features[FeatureVector::WRITE_RATIO] = mem_writes / (n);

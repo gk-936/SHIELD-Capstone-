@@ -1,0 +1,28 @@
+#ifndef MODEL_WEIGHTS_H
+#define MODEL_WEIGHTS_H
+
+const float THRESHOLD_SUSPICIOUS = 0.041008f;
+const float THRESHOLD_RANSOMWARE = 0.060356f;
+
+const float ENSEMBLE_WEIGHTS[6] = {0.1500f, 0.2000f, 0.2000f, 0.1500f, 0.1000f, 0.2000f};
+
+#define STORAGE_FEAT_COUNT 10
+#define MEMORY_FEAT_COUNT 6
+
+const float SCALER_S_CENTER[] = {653022.000000f, 0.593814f, 0.996210f, 0.355506f, 0.027083f, 3240.941306f, 144.490338f, 811.397707f, 394353.500000f, 170183176.000000f};
+const float SCALER_S_SCALE[] = {1282696.750000f, 0.361637f, 0.000628f, 0.459733f, 0.237089f, 6544.593851f, 16008.058399f, 823.550355f, 833281.000000f, 145216.000000f};
+
+const float SCALER_M_CENTER[] = {0.973188f, 0.041631f, 0.000000f, 0.001232f, 652.385532f, 10.872947f};
+const float SCALER_M_SCALE[] = {0.115004f, 0.100244f, 1.000000f, 0.001744f, 1323.498923f, 27.214326f};
+
+struct Normalizer { float min; float scale; };
+const Normalizer MODEL_NORMALIZERS[] = {
+    { 0.509689f, 3.566959f }, // IF_storage
+    { 0.473201f, 2.637855f }, // IF_memory
+    { 0.548196f, 3.707020f }, // IF_full
+    { -0.287986f, 0.051716f }, // hbos
+    { -0.000000f, 0.000000f }, // lof
+    { 0.447959f, 3.470308f }, // IF_diverse
+};
+
+#endif // MODEL_WEIGHTS_H
