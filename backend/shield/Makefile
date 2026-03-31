@@ -4,7 +4,7 @@ BPFTOOL ?= bpftool
 ARCH := $(shell uname -m | sed 's/x86_64/x86/')
 BPF_OBJ := bpf/shield_sensors.bpf.o
 BPF_SKEL := daemon/shield_sensors.skel.h
-ENGINE_SRC := daemon/engine/feature_engine.cpp daemon/engine/feature_calculator.cpp daemon/engine/normalization.cpp daemon/engine/inference_council.cpp
+ENGINE_SRC := daemon/engine/feature_engine.cpp daemon/engine/feature_calculator.cpp daemon/engine/inference_council.cpp
 DAEMON_SRC := daemon/loader.cpp daemon/ring_buffer_consumer.cpp $(ENGINE_SRC)
 DAEMON_EXE := shield_daemon
 
