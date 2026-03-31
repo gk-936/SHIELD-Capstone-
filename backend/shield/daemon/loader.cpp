@@ -21,14 +21,19 @@ static pid_t g_dashboard_pid = -1;
 void start_dashboard() {
     g_dashboard_pid = fork();
     if (g_dashboard_pid == 0) {
-        // Child: Launch the Vite wrapper to handle polyfills and pathing
+        // Child: Change directory to project root for correct config loading
         std::cout << "[🛡️] Launching S.H.I.E.L.D. Dashboard (Vite)..." << std::endl;
         
-        // Use our new wrapper which correctly imports the root node_modules
-        // We MUST point to the root config explicitly (--config ../../vite.config.ts)
-        execlp("node", "node", "vite-wrapper.js", "--", "--port", "5173", "--host", "--config", "../../vite.config.ts", NULL);
+        // Move from backend/shield/ to project root (../..)
+        if (chdir("../..") != 0) {
+            std::cerr << "[🛡️] Failed to reach project root." << std::endl;
+            exit(1);
+        }
+
+        // Launch standard Vite via npm (now finds root vite.config.js)
+        execlp("npm", "npm", "run", "dev", "--", "--host", NULL);
         
-        std::cerr << "[🛡️] Failed to start dashboard. Is node installed?" << std::endl;
+        std::cerr << "[🛡️] Failed to start dashboard. Is npm installed?" << std::endl;
         exit(1);
     }
 }
