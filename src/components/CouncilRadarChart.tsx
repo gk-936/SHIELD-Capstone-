@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 import { useAppStore } from '../store/appStore';
-import { ProcessInfo } from '../types';
+import type { ProcessInfo } from '../types';
 
 interface CouncilRadarChartProps {
   pid?: number;
