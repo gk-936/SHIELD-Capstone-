@@ -25,7 +25,8 @@ void start_dashboard() {
         std::cout << "[🛡️] Launching S.H.I.E.L.D. Dashboard (Vite)..." << std::endl;
         
         // Use our new wrapper which correctly imports the root node_modules
-        execlp("node", "node", "vite-wrapper.js", "--", "--port", "5173", "--host", NULL);
+        // We MUST point to the root config explicitly (--config ../../vite.config.ts)
+        execlp("node", "node", "vite-wrapper.js", "--", "--port", "5173", "--host", "--config", "../../vite.config.ts", NULL);
         
         std::cerr << "[🛡️] Failed to start dashboard. Is node installed?" << std::endl;
         exit(1);
