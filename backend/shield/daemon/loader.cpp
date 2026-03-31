@@ -19,7 +19,7 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
     return vfprintf(stderr, format, args);
 }
 
-extern int handle_ring_buffer(struct shield_sensors_bpf *skel);
+extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel);
 
 int main(int argc, char **argv) {
     struct shield_sensors_bpf *skel;
