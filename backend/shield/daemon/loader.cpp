@@ -21,14 +21,13 @@ static pid_t g_dashboard_pid = -1;
 void start_dashboard() {
     g_dashboard_pid = fork();
     if (g_dashboard_pid == 0) {
-        // Child: Launch Vite dev server with inline polyfill for Node 18
+        // Child: Launch the Vite wrapper to handle polyfills and pathing
         std::cout << "[🛡️] Launching S.H.I.E.L.D. Dashboard (Vite)..." << std::endl;
         
-        // This command injects CustomEvent globally before running vite
-        const char *cmd = "node --input-type=module -e \"global.CustomEvent=class extends Event{constructor(e,p){super(e,p);this.detail=p?.detail}};import('./node_modules/vite/bin/vite.js')\" -- --port 5173 --host";
+        // Use our new wrapper which correctly imports the root node_modules
+        execlp("node", "node", "vite-wrapper.js", "--", "--port", "5173", "--host", NULL);
         
-        execlp("sh", "sh", "-c", cmd, NULL);
-        std::cerr << "[🛡️] Failed to start dashboard. Is node/npm installed?" << std::endl;
+        std::cerr << "[🛡️] Failed to start dashboard. Is node installed?" << std::endl;
         exit(1);
     }
 }
