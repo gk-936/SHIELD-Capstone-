@@ -1,13 +1,5 @@
 import { create } from 'zustand';
 import type { AppState, ProcessInfo, Alert, ConnectionStatus } from '../types';
-import {
-  generateProcessInfo,
-  generateAlerts,
-  generateSystemHealthMetrics,
-  generateIncidentReports,
-  generateTamperEvents,
-  generateScalerRecalibration,
-} from '../mock/generators';
 
 interface AppStore extends AppState {
   // State update methods
@@ -17,109 +9,102 @@ interface AppStore extends AppState {
   updateAlerts: (alerts: Alert[]) => void;
   updateConnectionStatus: (status: ConnectionStatus) => void;
   
-  // Data mutation methods
-  updateMockData: () => void;
-  simulateWebSocketUpdate: () => void;
+  // Real-time integration
+  connectWebSocket: () => void;
 }
 
-// Initial mock data
-const initialProcesses = Array.from({ length: 12 }, (_, i) => {
-  const levels = ['BENIGN', 'BENIGN', 'SUSPICIOUS', 'MEDIUM', 'HIGH'] as const;
-  return generateProcessInfo(2000 + i, levels[i % 5]);
-}).sort((a, b) => b.rankScore - a.rankScore);
+export const useAppStore = create<AppStore>((set, get) => {
+  let ws: WebSocket | null = null;
 
-const initialAlerts = generateAlerts(8);
-const initialSystemHealth = generateSystemHealthMetrics();
-const initialReports = generateIncidentReports(5);
-const initialTamperLog = generateTamperEvents();
-const initialScalerRecal = generateScalerRecalibration();
+  const connectWebSocket = () => {
+    if (ws) return;
 
-export const useAppStore = create<AppStore>((set) => {
-  // Set up WebSocket simulation interval
-  setInterval(() => {
-    set((state) => {
-      // Slightly modify process data to simulate live updates
-      const updatedProcesses = state.processes.map(proc => ({
-        ...proc,
-        rankScore: Math.max(0, Math.min(1, proc.rankScore + (Math.random() - 0.5) * 0.05)),
-        readCount: proc.readCount + Math.floor(Math.random() * 10),
-        writeCount: proc.writeCount + Math.floor(Math.random() * 10),
-        meanEntropy: Math.max(0, Math.min(8, proc.meanEntropy + (Math.random() - 0.5) * 0.2)),
-        currentCpu: Math.max(0, proc.currentCpu + (Math.random() - 0.5) * 5),
-        currentMemory: Math.max(0, proc.currentMemory + (Math.random() - 0.5) * 50),
-      })).sort((a, b) => b.rankScore - a.rankScore);
+    console.log("[🛡️] Connecting to S.H.I.E.L.D. Daemon...");
+    ws = new WebSocket('ws://localhost:8080');
 
-      // Occasionally update alerts
-      const updatedAlerts = Math.random() > 0.7
-        ? [generateAlerts(1)[0], ...state.alerts.slice(0, 7)]
-        : state.alerts;
+    ws.onopen = () => {
+      set({ connectionStatus: { connected: true, lastHeartbeat: Date.now() } });
+      console.log("[🛡️] Connected to Telemetry Bridge.");
+    };
 
-      // Update system health slightly
-      const updatedSystemHealth = {
-        ...state.systemHealth,
-        ringBufferFillPercentage: Math.max(0, Math.min(100, 
-          state.systemHealth.ringBufferFillPercentage + (Math.random() - 0.5) * 5
-        )),
-        eventsPerSecond: Math.max(100, state.systemHealth.eventsPerSecond + Math.floor((Math.random() - 0.5) * 500)),
-      };
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'window_update') {
+          set((state) => {
+            const existingProcIdx = state.processes.findIndex(p => p.pid === data.pid);
+            let updatedProcesses = [...state.processes];
 
-      return {
-        processes: updatedProcesses,
-        alerts: updatedAlerts,
-        systemHealth: updatedSystemHealth,
-        connectionStatus: {
-          connected: true,
-          lastHeartbeat: Date.now(),
-        },
-      };
-    });
-  }, 5000);
+            const newProc: ProcessInfo = {
+                pid: data.pid,
+                name: data.comm,
+                rankScore: data.score,
+                decisionLevel: data.score > 0.6 ? 'HIGH' : data.score > 0.3 ? 'MEDIUM' : 'BENIGN',
+                readCount: 0,
+                writeCount: 0,
+                meanEntropy: 0,
+                highEntropyRatio: 0,
+                rwRatio: 0,
+                entropyTrend: 0,
+                ioAcceleration: 0,
+                writeEntropyVolume: 0,
+                currentCpu: 0,
+                currentMemory: 0,
+                lastSeen: Date.now()
+            };
+
+            if (existingProcIdx !== -1) {
+              updatedProcesses[existingProcIdx] = { ...updatedProcesses[existingProcIdx], rankScore: data.score };
+            } else {
+              updatedProcesses.push(newProc);
+            }
+
+            return { 
+                processes: updatedProcesses.sort((a, b) => b.rankScore - a.rankScore).slice(0, 50),
+                connectionStatus: { connected: true, lastHeartbeat: Date.now() }
+            };
+          });
+        }
+      } catch (e) {
+        console.error("[🛡️] Malformed packet received.");
+      }
+    };
+
+    ws.onclose = () => {
+      ws = null;
+      set({ connectionStatus: { connected: false, lastHeartbeat: Date.now() } });
+      console.log("[🛡️] Disconnected. Retrying...");
+      setTimeout(() => get().connectWebSocket(), 3000);
+    };
+  };
 
   return {
-    // Initial state
+    // Initial state (Empty - waiting for real data)
     currentPage: 'overview',
     selectedProcessPid: undefined,
-    processes: initialProcesses,
-    alerts: initialAlerts,
-    systemHealth: initialSystemHealth,
-    reportsData: initialReports,
-    tamperLog: initialTamperLog,
-    scalerRecalibration: initialScalerRecal,
+    processes: [],
+    alerts: [],
+    systemHealth: {
+        ringBufferFillPercentage: 0,
+        eventsPerSecond: 0,
+        alertsToday: 0,
+        modelStatus: 'LOADED',
+        version: '1.0.0-PROD'
+    },
+    reportsData: [],
+    tamperLog: [],
+    scalerRecalibration: { lastRecalibration: Date.now(), nextScheduled: Date.now() + 86400000, driftMetric: 0 },
     connectionStatus: {
-      connected: true,
+      connected: false,
       lastHeartbeat: Date.now(),
     },
 
     // Methods
     setCurrentPage: (page) => set({ currentPage: page }),
-    
     setSelectedProcessPid: (pid) => set({ selectedProcessPid: pid }),
-    
     updateProcesses: (processes) => set({ processes }),
-    
     updateAlerts: (alerts) => set({ alerts }),
-    
     updateConnectionStatus: (status) => set({ connectionStatus: status }),
-    
-    updateMockData: () => {
-      set({
-        processes: Array.from({ length: 12 }, () => generateProcessInfo()).sort((a, b) => b.rankScore - a.rankScore),
-        alerts: generateAlerts(8),
-        systemHealth: generateSystemHealthMetrics(),
-        reportsData: generateIncidentReports(5),
-        tamperLog: generateTamperEvents(),
-        scalerRecalibration: generateScalerRecalibration(),
-      });
-    },
-    
-    simulateWebSocketUpdate: () => {
-      // This is called by the WebSocket update interval
-      // The actual updates are handled by setInterval in the store creation
-    },
+    connectWebSocket,
   };
 });
-
-// Clean up interval on store destruction
-export const initializeWebSocketSimulation = () => {
-  // Already initialized in create function above
-};

@@ -6,8 +6,29 @@
 #include "shield_sensors.skel.h"
 #include "bpf/common.h"
 #include "engine/feature_engine.hpp"
+#include "dashboard_bridge.hpp"
+#include <sys/wait.h>
 
-FeatureEngine g_engine; // Global engine instance
+namespace shield {
+    extern DashboardBridge g_dashboard;
+}
+
+FeatureEngine g_engine;
+extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel);
+
+static pid_t g_dashboard_pid = -1;
+
+void start_dashboard() {
+    g_dashboard_pid = fork();
+    if (g_dashboard_pid == 0) {
+        // Child: Launch Vite dev server
+        std::cout << "[🛡️] Launching S.H.I.E.L.D. Dashboard (Vite)..." << std::endl;
+        // Using sh -c to ensure npm is in the shell context
+        execlp("npm", "npm", "run", "dev", "--", "--port", "5173", "--host", NULL);
+        std::cerr << "[🛡️] Failed to start dashboard. Is npm installed?" << std::endl;
+        exit(1);
+    }
+}
 
 static volatile bool exiting = false;
 
@@ -55,6 +76,12 @@ int main(int argc, char **argv) {
 
     printf("S.H.I.E.L.D Sensor Layer Loaded Successfully.\n");
     printf("Intercepting storage and memory events...\n");
+
+    /* Start Dashboard Bridge */
+    shield::g_dashboard.Start();
+
+    /* Start Dashboard Frontend */
+    start_dashboard();
 
     /* Initialize Ring Buffer Consumption */
     err = handle_ring_buffer(skel);

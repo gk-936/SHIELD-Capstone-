@@ -8,15 +8,12 @@ import { IncidentReportsPage } from './pages/IncidentReportsPage';
 import { SystemHealthPage } from './pages/SystemHealthPage';
 
 function App() {
-  const { currentPage } = useAppStore();
+  const { currentPage, connectWebSocket } = useAppStore();
 
-  // Initialize WebSocket simulation on mount
+  // Initialize WebSocket connection on mount
   useEffect(() => {
-    // WebSocket simulation is already handled in the store with setInterval
-    return () => {
-      // Cleanup if needed
-    };
-  }, []);
+    connectWebSocket();
+  }, [connectWebSocket]);
 
   return (
     <div className="flex h-screen bg-dark-900 text-gray-100">

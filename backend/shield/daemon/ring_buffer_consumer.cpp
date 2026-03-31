@@ -1,6 +1,7 @@
 #include "feature_engine.hpp"
 #include "feature_scaler.h"
 #include "inference_council.h"
+#include "dashboard_bridge.hpp"
 #include "shield_sensors.skel.h"
 #include "bpf/common.h"
 #include <iostream>
@@ -8,6 +9,10 @@
 #include <vector>
 #include <cstring>
 #include <bpf/libbpf.h>
+
+namespace shield {
+    extern DashboardBridge g_dashboard;
+}
 
 namespace shield {
 
@@ -33,6 +38,12 @@ public:
             auto scaled_v = scaler_->Scale(raw_v);
             int level = council_->Predict(scaled_v);
             
+            // Push real-time telemetry to Dashboard
+            std::string json = "{\"type\":\"window_update\", \"pid\":" + std::to_string(fv.pid) + 
+                               ", \"comm\":\"" + std::string(fv.comm) + 
+                               "\", \"score\":" + std::to_string(level/2.0) + "}";
+            g_dashboard.PushUpdate(json);
+
             if (level > 0) {
                 HandleThreat(fv.pid, level, fv.comm);
             }
