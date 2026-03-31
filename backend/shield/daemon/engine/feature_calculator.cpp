@@ -1,4 +1,5 @@
 #include "feature_engine.hpp"
+#include <cstring>
 #include <algorithm>
 #include <numeric>
 #include <cmath>

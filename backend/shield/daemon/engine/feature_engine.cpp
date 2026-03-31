@@ -1,4 +1,5 @@
 #include "feature_engine.hpp"
+#include <cstring>
 
 FeatureEngine::FeatureEngine(double window_duration, double step_interval)
     : window_duration_s_(window_duration), step_interval_s_(step_interval) {}

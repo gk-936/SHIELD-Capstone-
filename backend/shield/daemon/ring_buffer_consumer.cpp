@@ -1,9 +1,10 @@
-#include "feature_engine.h"
+#include "feature_engine.hpp"
 #include "feature_scaler.h"
-#include "../engine/inference_council.h"
+#include "inference_council.h"
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <cstring>
 
 namespace shield {
 
@@ -17,8 +18,8 @@ public:
 
     void OnEvent(const void* event_ptr) {
         // Casting from generic ptr to our shield struct
-        // const struct shield_event* event = (const struct shield_event*)event_ptr;
-        // engine_->PushEvent(event);
+        // const struct event_t* event = (const struct event_t*)event_ptr;
+        // engine_->push_event(*event);
         
         // Mocking for integration check
         uint32_t pid = 1234;
