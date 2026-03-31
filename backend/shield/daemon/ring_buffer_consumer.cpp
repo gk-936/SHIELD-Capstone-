@@ -1,6 +1,8 @@
 #include "feature_engine.hpp"
 #include "feature_scaler.h"
 #include "inference_council.h"
+#include "shield_sensors.skel.h"
+#include "bpf/common.h"
 #include <iostream>
 #include <memory>
 #include <vector>
@@ -16,31 +18,42 @@ public:
         council_ = std::make_unique<InferenceCouncil>();
     }
 
+    /* Process a raw event from the BPF ring buffer */
     void OnEvent(const void* event_ptr) {
-        // Casting from generic ptr to our shield struct
-        // const struct event_t* event = (const struct event_t*)event_ptr;
-        // engine_->push_event(*event);
+        // 1. Parse raw event
+        const struct event_t* e = static_cast<const struct event_t*>(event_ptr);
         
-        // Mocking for integration check
-        uint32_t pid = 1234;
-        if (engine_->IsWindowReady(pid)) {
-            std::vector<float> features = {0.1f, 0.2f}; // Mock features
-            auto scaled = scaler_->Scale(features);
+        // 2. Feed into Feature Engine for windowing
+        engine_->push_event(*e);
+        
+        // 3. Check for ready feature windows (sliding 60s windows)
+        std::vector<FeatureVector> ready_windows = engine_->get_ready_windows();
+        
+        for (const auto& fv : ready_windows) {
+            // 4. Robust Scaling (Pre-processing)
+            std::vector<float> raw_v;
+            for(int i=0; i<32; ++i) raw_v.push_back((float)fv.features[i]);
             
-            // AI Inference Engine
-            int level = council_->Predict(scaled);
+            auto scaled_v = scaler_->Scale(raw_v);
+            
+            // 5. AI Council Inference
+            int level = council_->Predict(scaled_v);
+            
             if (level > 0) {
-                HandleThreat(pid, level);
+                HandleThreat(fv.pid, level, fv.comm);
             }
         }
+        
+        // 6. Periodic maintenance
+        engine_->prune_inactive_pids();
     }
 
 private:
-    void HandleThreat(uint32_t pid, int level) {
+    void HandleThreat(uint32_t pid, int level, const char* comm) {
         if (level == 2) {
-            std::cout << "[SHIELD] HIGH THREAT DETECTED (PID " << pid << "): Ransomware activity confirmed! Kill signal sent." << std::endl;
+            std::cout << "[🛡️ SHIELD] RANSOMWARE ALERT (PID " << pid << ", " << comm << "): High threat score! Intercepting..." << std::endl;
         } else if (level == 1) {
-            std::cout << "[SHIELD] SUSPICIOUS ACTIVITY (PID " << pid << "): Medium threat detected. Forensic snapshot taken." << std::endl;
+            std::cout << "[🛡️ SHIELD] SUSPICIOUS ACTIVITY (PID " << pid << ", " << comm << "): Medium threat score." << std::endl;
         }
     }
 
