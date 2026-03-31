@@ -16,6 +16,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    host: true, // Needed for VM/Headless environments
+    host: '0.0.0.0', // Force listening on all interfaces (Tailscale/Public)
+    strictPort: true,
   }
 })
