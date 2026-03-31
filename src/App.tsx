@@ -6,6 +6,7 @@ import { ProcessDetailPage } from './pages/ProcessDetailPage';
 import { AlertHistoryPage } from './pages/AlertHistoryPage';
 import { IncidentReportsPage } from './pages/IncidentReportsPage';
 import { SystemHealthPage } from './pages/SystemHealthPage';
+import { SettingsPage } from './pages/SettingsPage';
 
 function App() {
   const { currentPage, connectWebSocket } = useAppStore();
@@ -25,6 +26,7 @@ function App() {
         {currentPage === 'alert-history' && <AlertHistoryPage />}
         {currentPage === 'reports' && <IncidentReportsPage />}
         {currentPage === 'system-health' && <SystemHealthPage />}
+        {currentPage === 'settings' && <SettingsPage />}
       </div>
     </div>
   );

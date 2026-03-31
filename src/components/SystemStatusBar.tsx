@@ -1,11 +1,11 @@
-﻿import React from 'react';
+import React from 'react';
 import { useAppStore } from '../store/appStore';
 import { Shield } from 'lucide-react';
 
 export const SystemStatusBar: React.FC = () => {
-  const { processes, alerts, systemHealth } = useAppStore();  
+  const { processes, alerts, systemHealth, settings } = useAppStore();  
 
-  const activeMediumHighAlerts = alerts.filter(a => ['MEDIUM', 'HIGH', 'CONFIRMED'].includes(a.peakLevel)).length;
+  const activeMediumHighAlerts = alerts.filter(a => a.peakScore >= settings.thresholds.suspicious).length;
 
   let statusColor = '#22c55e';
   let statusLabel = 'HEALTHY';
@@ -13,7 +13,7 @@ export const SystemStatusBar: React.FC = () => {
   if (systemHealth.eventsDropped > 0) {
     statusColor = '#ef4444';
     statusLabel = 'CRITICAL';
-  } else if (activeMediumHighAlerts >= 3) {
+  } else if (alerts.some(a => a.peakScore >= settings.thresholds.critical)) {
     statusColor = '#ef4444';
     statusLabel = 'CRITICAL';
   } else if (activeMediumHighAlerts >= 1) {

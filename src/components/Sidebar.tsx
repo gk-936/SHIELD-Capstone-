@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { useAppStore } from '../store/appStore';
 import { Shield, Activity, AlertTriangle, FileText, Settings, Clock } from 'lucide-react';
 
@@ -10,7 +10,8 @@ export const Sidebar: React.FC = () => {
     { id: 'process-detail', label: 'Process Detail', icon: AlertTriangle },
     { id: 'alert-history', label: 'Alerts', icon: Clock },
     { id: 'reports', label: 'Reports', icon: FileText },
-    { id: 'system-health', label: 'Health', icon: Settings },
+    { id: 'system-health', label: 'Health', icon: Activity },
+    { id: 'settings', label: 'Settings', icon: Settings },
   ] as const;
 
   return (

@@ -1,6 +1,6 @@
-#include "feature_engine.hpp"
-#include "feature_scaler.h"
-#include "inference_council.h"
+#include "engine/feature_engine.hpp"
+#include "engine/feature_scaler.h"
+#include "engine/inference_council.h"
 #include "dashboard_bridge.hpp"
 #include "shield_sensors.skel.h"
 #include "bpf/common.h"
@@ -13,6 +13,9 @@
 #include <cstring>
 #include <string>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <bpf/libbpf.h>
 
 namespace shield {
@@ -29,10 +32,8 @@ public:
         council_ = std::make_unique<InferenceCouncil>();
     }
 
-    /* Process a raw event from the BPF ring buffer */
     void OnEvent(const void* event_ptr) {
         const struct event_t* e = static_cast<const struct event_t*>(event_ptr);
-        
         engine_->push_event(*e);
         
         std::vector<FeatureVector> ready_windows = engine_->get_ready_windows();
@@ -44,67 +45,87 @@ public:
             int level = council_->Predict(scaled_v);
             float real_score = council_->GetLastScore();
             
-            // Push real-time telemetry to Dashboard
-            std::string json = "{\"type\":\"window_update\", \"pid\":" + std::to_string(fv.pid) + 
-                               ", \"comm\":\"" + std::string(fv.comm) + 
-                               "\", \"score\":" + std::to_string(real_score) + 
-                               ", \"features\": [";
-            for(int i=0; i<32; ++i) {
-                json += std::to_string(fv.features[i]) + (i == 31 ? "" : ",");
-            }
-            json += "], \"radar\": [" + 
-                    std::to_string(real_score) + "," +            /* Overall */
-                    std::to_string(real_score * 0.92) + "," +     /* IF_storage */
-                    std::to_string(real_score * 1.05) + "," +     /* IF_memory */
-                    std::to_string(real_score * 0.88) + "," +     /* HBOS */
-                    std::to_string(real_score * 1.12) + "]}";     /* LOF */
-            
-            g_dashboard.PushUpdate(json);
+            double cpu = 0.0, rss = 0.0;
+            GetProcessMetrics(fv.pid, cpu, rss);
 
-            /* FALSE POSITIVE REDUCTION: Temporal Consensus (M-of-N Detector) */
+            std::string top_feature = "Normal Activity";
+            double max_val = -1.0;
+            int top_idx = -1;
+            for(int i=0; i<32; i++) {
+                if(fv.features[i] > max_val) {
+                    max_val = fv.features[i];
+                    top_idx = i;
+                }
+            }
+            if(max_val > 0.5) {
+                switch(top_idx) {
+                    case FeatureVector::MEAN_ENTROPY: top_feature = "High Entropy"; break;
+                    case FeatureVector::TOTAL_BYTES: top_feature = "Massive I/O"; break;
+                    case FeatureVector::IO_ACCELERATION: top_feature = "I/O Acceleration"; break;
+                    case FeatureVector::WRITE_RATIO: top_feature = "Write Intensive"; break;
+                    case FeatureVector::UNIQUE_BLOCKS: top_feature = "Broad Encryption"; break;
+                    default: top_feature = "Behavioral Anomaly"; break;
+                }
+            }
+
+            std::stringstream ss;
+            ss << std::fixed << std::setprecision(2);
+            ss << "{\"type\":\"window_update\", \"pid\":" << fv.pid 
+               << ", \"comm\":\"" << fv.comm 
+               << "\", \"score\":" << real_score 
+               << ", \"level\":" << level
+               << ", \"cpu\":" << cpu
+               << ", \"mem\":" << rss
+               << ", \"top_feature\":\"" << top_feature << "\""
+               << ", \"top_value\":" << max_val << "}";
+            
+            g_dashboard.PushUpdate(ss.str());
+
             auto& history = threat_history_[fv.pid];
             history.push_back(level);
             if (history.size() > 3) history.pop_front();
 
             int consensus_level = 0;
             if (history.size() >= 2) {
-                // Suspicious (Medium) requires 2 consecutive windows > 0
-                if (history[history.size()-1] >= 1 && history[history.size()-2] >= 1) {
-                    consensus_level = 1;
-                }
-                // Ransomware (High) requires 3 consecutive windows == 2
-                if (history.size() == 3 && history[0] == 2 && history[1] == 2 && history[2] == 2) {
-                    consensus_level = 2;
-                }
+                if (history[history.size()-1] >= 1 && history[history.size()-2] >= 1) consensus_level = 1;
+                if (history.size() == 3 && history[0] == 2 && history[1] == 2 && history[2] == 2) consensus_level = 2;
             }
 
             if (consensus_level > 0) {
-                HandleThreat(fv.pid, consensus_level, fv.comm);
+                HandleThreat(fv.pid, consensus_level, fv.comm, cpu, rss, top_feature);
             }
         }
         engine_->prune_inactive_pids();
     }
 
 private:
+    void GetProcessMetrics(uint32_t pid, double &cpu, double &rss_mb) {
+        std::string path = "/proc/" + std::to_string(pid) + "/stat";
+        std::ifstream stat_file(path);
+        if (!stat_file.is_open()) return;
+
+        std::string tmp;
+        unsigned long utime, stime, rss_pages;
+        for(int i=0; i<13; i++) stat_file >> tmp;
+        stat_file >> utime >> stime;
+        for(int i=0; i<8; i++) stat_file >> tmp;
+        stat_file >> rss_pages;
+
+        rss_mb = (rss_pages * 4.0) / 1024.0; 
+        cpu = ((double)(utime + stime) / 100.0);
+    }
+
     bool IsKernelProcess(uint32_t pid, const char* comm) {
-        if (pid < 1000) return true; // System processes/daemons
+        if (pid < 1000) return true;
         std::string name(comm);
-        // Common kernel processes that exhibit high I/O or entropy-like behavior
         if (name.find("kworker") == 0) return true;
         if (name.find("jbd2") == 0) return true;
         if (name.find("ext4-rsv-conver") == 0) return true;
-        if (name.find("cpuhp/") == 0) return true;
-        if (name.find("migration/") == 0) return true;
-        if (name.find("rcu_preempt") == 0) return true;
-        if (name == "systemd-journal") return true;
         return false;
     }
 
-    void HandleThreat(uint32_t pid, int level, const char* comm) {
-        if (IsKernelProcess(pid, comm)) {
-            // Silently drop alerts for kernel processes to reduce noise
-            return;
-        }
+    void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature) {
+        if (IsKernelProcess(pid, comm)) return;
 
         if (level == 2) {
             std::cout << "[🛡️ SHIELD] RANSOMWARE ALERT (PID " << pid << ", " << comm << "): High threat score! Intercepting..." << std::endl;
@@ -112,12 +133,17 @@ private:
             std::cout << "[🛡️ SHIELD] SUSPICIOUS ACTIVITY (PID " << pid << ", " << comm << "): Medium threat score. Consensus achieved." << std::endl;
         }
 
-        // Push Alert to Dashboard
-        std::string alert_json = "{\"type\":\"alert_update\", \"pid\":" + std::to_string(pid) + 
-                                 ", \"comm\":\"" + std::string(comm) + 
-                                 "\", \"level\":\"" + (level == 2 ? "HIGH" : "MEDIUM") + 
-                                 "\", \"technique\":\"T1486\", \"description\":\"Data Encrypted for Impact\"}";
-        g_dashboard.PushUpdate(alert_json);
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(2);
+        ss << "{\"type\":\"alert_update\", \"pid\":" << pid 
+           << ", \"comm\":\"" << comm 
+           << "\", \"level\":\"" << (level == 2 ? "HIGH" : "MEDIUM") 
+           << "\", \"cpu\":" << cpu
+           << ", \"mem\":" << rss
+           << ", \"top_feature\":\"" << top_feature
+           << "\", \"technique\":\"T1486\", \"description\":\"Data Encrypted for Impact\"}";
+        
+        g_dashboard.PushUpdate(ss.str());
     }
 
     std::unique_ptr<FeatureEngine> engine_;
@@ -126,7 +152,6 @@ private:
     std::map<uint32_t, std::deque<int>> threat_history_;
 };
 
-/* Global instance for the BPF callback */
 static RingBufferConsumer g_consumer;
 
 static int handle_event(void *ctx, void *data, size_t data_sz) {
@@ -136,28 +161,19 @@ static int handle_event(void *ctx, void *data, size_t data_sz) {
 
 } // namespace shield
 
-/* C-bridge to connect loader.cpp to the C++ consumer */
 extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel) {
     struct ring_buffer *rb = NULL;
     int err;
-
-    /* Set up ring buffer polling */
     rb = ring_buffer__new(bpf_map__fd(skel->maps.rb), shield::handle_event, NULL, NULL);
     if (!rb) {
         fprintf(stderr, "Failed to create ring buffer\n");
         return -1;
     }
-
     while (true) {
-        err = ring_buffer__poll(rb, 100 /* ms */);
-        /* Ctrl-C handled by loader.cpp global state */
+        err = ring_buffer__poll(rb, 100);
         if (err == -EINTR) continue;
-        if (err < 0) {
-            printf("Error polling ring buffer: %d\n", err);
-            break;
-        }
+        if (err < 0) break;
     }
-
     ring_buffer__free(rb);
     return err;
 }

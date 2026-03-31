@@ -169,6 +169,19 @@ export interface SystemHealthMetrics {
   };
 }
 
+// User-configurable settings
+export interface Settings {
+  thresholds: {
+    suspicious: number;
+    critical: number;
+  };
+  whitelist: string[];
+  remoteIp: string;
+  remotePort: number;
+  autoConnect: boolean;
+  historyLimit: number;
+}
+
 // Sliding window rank observation
 export interface RankObservation {
   timestamp: number;
@@ -223,7 +236,7 @@ export interface ProcessDetail {
 
 // Global state for the application
 export interface AppState {
-  currentPage: 'overview' | 'process-detail' | 'alert-history' | 'reports' | 'system-health';
+  currentPage: 'overview' | 'process-detail' | 'alert-history' | 'reports' | 'system-health' | 'settings';
   selectedProcessPid?: number;
   processes: ProcessInfo[];
   alerts: Alert[];
@@ -233,6 +246,7 @@ export interface AppState {
   reportsData: IncidentReport[];
   tamperLog: TamperEvent[];
   scalerRecalibration: ScalerRecalibrationInfo;
+  settings: Settings;
 }
 
 // Chart data point

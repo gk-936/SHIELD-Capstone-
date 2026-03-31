@@ -3,7 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, R
 import { useAppStore } from '../store/appStore';
 
 export const SlidingWindowRankChart: React.FC = () => {
-  const { selectedProcessPid, globalRankHistory } = useAppStore();
+  const { selectedProcessPid, globalRankHistory, settings } = useAppStore();
 
   const chartData = useMemo(() => {
     // If no live data yet, show empty or placeholder
@@ -60,12 +60,12 @@ export const SlidingWindowRankChart: React.FC = () => {
             />
 
             <ReferenceLine
-              y={0.5}
+              y={settings.thresholds.suspicious}
               stroke="#eab308"
               strokeOpacity={0.5}
               strokeDasharray="4 4"
               label={{
-                value: 'MED (0.5)',
+                value: `SUSPICIOUS (${settings.thresholds.suspicious})`,
                 position: 'insideTopLeft',
                 fill: '#eab308',
                 fontSize: 9,
@@ -73,25 +73,12 @@ export const SlidingWindowRankChart: React.FC = () => {
               }}
             />
             <ReferenceLine
-              y={0.7}
-              stroke="#f97316"
-              strokeOpacity={0.5}
-              strokeDasharray="4 4"
-              label={{
-                value: 'HIGH (0.7)',
-                position: 'insideTopLeft',
-                fill: '#f97316',
-                fontSize: 9,
-                opacity: 0.8
-              }}
-            />
-            <ReferenceLine
-              y={0.9}
+              y={settings.thresholds.critical}
               stroke="#ef4444"
               strokeOpacity={0.5}
               strokeDasharray="4 4"
               label={{
-                value: 'CRIT (0.9)',
+                value: `CRITICAL (${settings.thresholds.critical})`,
                 position: 'insideTopLeft',
                 fill: '#ef4444',
                 fontSize: 9,

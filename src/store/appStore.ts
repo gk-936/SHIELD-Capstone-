@@ -12,7 +12,17 @@ interface AppStore extends AppState {
   // Real-time integration
   globalRankHistory: { time: string, score: number }[];
   connectWebSocket: () => void;
+  updateSettings: (settings: Partial<AppState['settings']>) => void;
 }
+
+const DEFAULT_SETTINGS: AppState['settings'] = {
+  thresholds: { suspicious: 0.5, critical: 0.8 },
+  whitelist: ['systemd', 'dbus-daemon', 'tailscaled', 'kworker'],
+  remoteIp: '100.100.186.46',
+  remotePort: 8080,
+  autoConnect: true,
+  historyLimit: 60
+};
 
 const initialSystemHealth: SystemHealthMetrics = {
     ringBufferFillPercentage: 0,
@@ -58,6 +68,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     },
     systemHealth: initialSystemHealth,
     connectionStatus: { connected: false, lastHeartbeat: 0 },
+    settings: JSON.parse(localStorage.getItem('shield_settings') || JSON.stringify(DEFAULT_SETTINGS)),
 
     // Actions
     setCurrentPage: (page) => set({ currentPage: page }),
@@ -65,14 +76,18 @@ export const useAppStore = create<AppStore>((set, get) => {
     updateProcesses: (processes) => set({ processes }),
     updateAlerts: (alerts) => set({ alerts }),
     updateConnectionStatus: (status) => set({ connectionStatus: status }),
+    updateSettings: (newSettings) => set((state) => {
+      const updatedSettings = { ...state.settings, ...newSettings };
+      localStorage.setItem('shield_settings', JSON.stringify(updatedSettings));
+      return { settings: updatedSettings };
+    }),
 
     connectWebSocket: () => {
       if (ws) return;
 
       console.log("[🛡️] Connecting to S.H.I.E.L.D. Daemon...");
-      // Using Tailscale IP for robust cross-machine connectivity
-      const vmIp = '100.100.186.46';
-      ws = new WebSocket(`ws://${vmIp}:8080`);
+      const { remoteIp, remotePort } = get().settings;
+      ws = new WebSocket(`ws://${remoteIp}:${remotePort}`);
 
       ws.onopen = () => {
         set({ connectionStatus: { connected: true, lastHeartbeat: Date.now() } });
@@ -85,6 +100,8 @@ export const useAppStore = create<AppStore>((set, get) => {
           
           if (data.type === 'window_update') {
             set((state) => {
+              if (state.settings.whitelist.some(w => data.comm.includes(w))) return state;
+
               const existingProcIdx = state.processes.findIndex(p => p.pid === data.pid);
               let updatedProcesses = [...state.processes];
 
@@ -93,21 +110,21 @@ export const useAppStore = create<AppStore>((set, get) => {
                   processName: data.comm,
                   executablePath: `/proc/${data.pid}/exe`,
                   startTime: Date.now(),
-                  currentCpu: Math.random() * 5,
-                  currentMemory: Math.random() * 100,
+                  currentCpu: data.cpu !== undefined ? data.cpu : 0,
+                  currentMemory: data.mem !== undefined ? data.mem : 0,
                   cgroupMembership: 'user.slice',
                   rankScore: data.score,
-                  decisionLevel: data.score > 0.65 ? 'HIGH' : data.score > 0.35 ? 'MEDIUM' : 'BENIGN',
-                  readCount: data.features ? data.features[48] : 0, // WRITE_COUNT
+                  decisionLevel: data.level === 2 ? 'HIGH' : data.level === 1 ? 'MEDIUM' : 'BENIGN',
+                  readCount: data.features ? data.features[48] : 0, 
                   writeCount: data.features ? data.features[48] : 0,
-                  meanEntropy: data.features ? data.features[25] : 0, // MEAN_ENTROPY
+                  meanEntropy: data.features ? data.features[25] : 0,
                   highEntropyRatio: data.features ? data.features[27] : 0,
                   rwRatio: data.features ? data.features[50] : 1.0,
                   entropyTrend: data.features ? data.features[30] : 0,
                   ioAcceleration: data.features ? data.features[40] : 0,
                   writeEntropyVolume: data.features ? data.features[60] : 0,
-                  topSHAPFeature: 'Mean Entropy',
-                  topSHAPValue: data.score * 0.4,
+                  topSHAPFeature: data.top_feature || 'Normal Activity',
+                  topSHAPValue: data.top_value || 0,
                   features: data.features,
                   radarScores: data.radar
               };
@@ -136,7 +153,7 @@ export const useAppStore = create<AppStore>((set, get) => {
 
               return { 
                   processes: sorted.slice(0, 50),
-                  globalRankHistory: [...state.globalRankHistory, newHistoryPoint].slice(-60),
+                  globalRankHistory: [...state.globalRankHistory, newHistoryPoint].slice(-state.settings.historyLimit),
                   connectionStatus: { connected: true, lastHeartbeat: Date.now() }
               };
             });
@@ -159,13 +176,31 @@ export const useAppStore = create<AppStore>((set, get) => {
                 reportId: `REP-${Date.now()}`,
                 incidentId: newAlert.alertId,
                 timestamp: Date.now(),
-                ransomwareFamily: data.level === 'HIGH' ? 'Generic Ransomware' : undefined,
                 affectedPid: data.pid,
                 severity: newAlert.peakLevel,
                 mitreTechniques: ['T1486', 'T1059'],
-                htmlContent: `<h3>Forensic Audit for ${data.comm} (PID: ${data.pid})</h3>
-                             <p>Behaviors matching <b>Data Encrypted for Impact</b> were detected.</p>
-                             <ul><li>High Entropy Write detected</li><li>Rapid File Renaming</li></ul>`,
+                htmlContent: `<div class="forensic-report">
+                                <header>
+                                  <h3>Forensic Threat DNA: ${data.comm}</h3>
+                                  <span class="severity-badge ${newAlert.peakLevel.toLowerCase()}">${newAlert.peakLevel} SEVERITY</span>
+                                </header>
+                                <section>
+                                  <p>The S.H.I.E.L.D. behavioral engine identified a high-confidence match for <b>Data Encrypted for Impact</b>.</p>
+                                  <div class="metric-grid">
+                                    <div class="metric-item"><strong>Primary Trigger:</strong> ${data.top_feature}</div>
+                                    <div class="metric-item"><strong>CPU Load:</strong> ${data.cpu}%</div>
+                                    <div class="metric-item"><strong>Memory RSS:</strong> ${data.mem} MB</div>
+                                  </div>
+                                </section>
+                                <section>
+                                  <h4>Observed Indicators</h4>
+                                  <ul>
+                                    ${data.top_feature.includes('Entropy') ? '<li><b>Anomalous Variance:</b> High write entropy suggests active encryption.</li>' : ''}
+                                    ${data.top_feature.includes('I/O') ? '<li><b>Volume Spike:</b> Rapid sustained I/O throughput detected.</li>' : ''}
+                                    <li><b>Metadata Integrity:</b> Frequent rename/unlink syscalls observed.</li>
+                                  </ul>
+                                </section>
+                              </div>`,
                 forensicArtifacts: [`/proc/${data.pid}/exe`, `sh-bin-${data.pid}.log`],
                 responseActions: ['Process Throttled', 'Network Isolation Applied'],
                 recommendedRemediation: ['Rollback to snapshot T-5m', 'Rotate service credentials']
