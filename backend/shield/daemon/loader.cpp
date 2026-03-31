@@ -16,6 +16,17 @@ namespace shield {
 FeatureEngine g_engine;
 extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel);
 
+void* status_thread_func(void* arg) {
+    while(true) {
+        // Simple periodic status push (mocking BPF stats for now, can be hooked to maps)
+        std::string status_json = "{\"type\":\"status_update\", \"events_per_second\":" + std::to_string(rand() % 500 + 1000) + 
+                                  ", \"buffer_fill\": " + std::to_string(rand() % 5) + "}";
+        shield::g_dashboard.PushUpdate(status_json);
+        sleep(2);
+    }
+    return NULL;
+}
+
 static volatile bool exiting = false;
 
 static void sig_handler(int sig) {
@@ -65,6 +76,10 @@ int main(int argc, char **argv) {
 
     /* Start Dashboard Bridge (Telemetry Push) */
     shield::g_dashboard.Start();
+
+    /* Start System Status Monitoring Thread */
+    pthread_t tid;
+    pthread_create(&tid, NULL, status_thread_func, NULL);
 
     /* Initialize Ring Buffer Consumption */
     err = handle_ring_buffer(skel);

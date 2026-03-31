@@ -58,6 +58,13 @@ private:
         } else if (level == 1) {
             std::cout << "[🛡️ SHIELD] SUSPICIOUS ACTIVITY (PID " << pid << ", " << comm << "): Medium threat score." << std::endl;
         }
+
+        // Push Alert to Dashboard
+        std::string alert_json = "{\"type\":\"alert_update\", \"pid\":" + std::to_string(pid) + 
+                                 ", \"comm\":\"" + std::string(comm) + 
+                                 "\", \"level\":\"" + (level == 2 ? "HIGH" : "MEDIUM") + 
+                                 "\", \"technique\":\"T1486\", \"description\":\"Data Encrypted for Impact\"}";
+        g_dashboard.PushUpdate(alert_json);
     }
 
     std::unique_ptr<FeatureEngine> engine_;
