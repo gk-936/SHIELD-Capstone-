@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 const float THRESHOLD_SUSPICIOUS = 0.300000f;
-const float THRESHOLD_RANSOMWARE = 0.400000f;
+const float THRESHOLD_RANSOMWARE = 0.480000f;
 
 const float ENSEMBLE_WEIGHTS[6] = {0.1500f, 0.2000f, 0.2000f, 0.1500f, 0.1000f, 0.2000f};
 

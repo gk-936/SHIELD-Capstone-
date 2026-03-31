@@ -57,6 +57,10 @@ export interface ProcessInfo {
   writeEntropyVolume: number;
   topSHAPFeature: string;
   topSHAPValue: number;
+  
+  /* Hardened forensic data */
+  features?: number[];
+  radarScores?: number[];
 }
 
 // Feature vector with 32 features

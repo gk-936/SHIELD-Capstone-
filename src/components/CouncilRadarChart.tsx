@@ -1,23 +1,34 @@
 import React, { useMemo } from 'react';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
-import { generateCouncilScores } from '../mock/generators';
+import { useAppStore } from '../store/appStore';
+import { ProcessInfo } from '../types';
 
 interface CouncilRadarChartProps {
   pid?: number;
 }
 
 export const CouncilRadarChart: React.FC<CouncilRadarChartProps> = ({ pid }) => {
+  const { processes } = useAppStore();
+
   const data = useMemo(() => {
-    const scores = generateCouncilScores();
-    return [
-      { model: 'IF_storage', score: scores.IF_storage * 100 },
-      { model: 'IF_memory', score: scores.IF_memory * 100 },
-      { model: 'IF_full', score: scores.IF_full * 100 },
-      { model: 'HBOS', score: scores.HBOS * 100 },
-      { model: 'LOF', score: scores.LOF * 100 },
-      { model: 'IF_diverse', score: scores.IF_diverse * 100 },
+    const process = processes.find(p => p.pid === pid);
+    if (!process || !process.radarScores) return [
+      { model: 'Overall', score: 0 },
+      { model: 'IF_storage', score: 0 },
+      { model: 'IF_memory', score: 0 },
+      { model: 'HBOS', score: 0 },
+      { model: 'LOF', score: 0 },
     ];
-  }, [pid]);
+
+    const s = process.radarScores;
+    return [
+      { model: 'Overall', score: s[0] * 100 },
+      { model: 'IF_storage', score: s[1] * 100 },
+      { model: 'IF_memory', score: s[2] * 100 },
+      { model: 'HBOS', score: s[3] * 100 },
+      { model: 'LOF', score: s[4] * 100 },
+    ];
+  }, [pid, processes]);
 
   if (!pid) {
     return (

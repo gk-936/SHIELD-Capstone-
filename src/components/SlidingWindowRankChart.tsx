@@ -1,23 +1,16 @@
-﻿import React, { useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { useAppStore } from '../store/appStore';
-import { generateRankHistory } from '../mock/generators';
 
 export const SlidingWindowRankChart: React.FC = () => {
-  const { selectedProcessPid } = useAppStore();
+  const { selectedProcessPid, globalRankHistory } = useAppStore();
 
   const chartData = useMemo(() => {
-    const history = generateRankHistory(60);
-    return history.map(item => ({
-      time: new Date(item.timestamp).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      }),
-      score: item.score,
-      fullTime: item.timestamp,
-    }));
-  }, [selectedProcessPid]);
+    // If no live data yet, show empty or placeholder
+    if (globalRankHistory.length === 0) return [];
+    
+    return globalRankHistory;
+  }, [globalRankHistory]);
 
   return (
     <div className="bg-white/[0.02] backdrop-blur-xl rounded-3xl border border-white/5 p-7 h-full flex flex-col shadow-[0_8px_30px_rgb(0,0,0,0.5)]">

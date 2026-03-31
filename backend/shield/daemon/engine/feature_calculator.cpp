@@ -131,5 +131,15 @@ FeatureVector FeatureEngine::calculate_features(uint32_t pid, const PIDBuffer &b
     fv.features[FeatureVector::WRITE_RATIO] = mem_writes / (n);
     fv.features[FeatureVector::RW_RATIO] = mem_writes > 0 ? mem_reads / mem_writes : 1.0;
 
+    /* 4. Applied Logic: False Positive Reduction (Volume Gating) */
+    /* If the process has written very little data, it's unlikely to be ransomware.
+       We'll inject a "Confidence" metric or directly suppress features if below threshold. */
+    if (total_bytes < 262144) { // 256 KB
+        // Dampen all high-entropy signals
+        fv.features[FeatureVector::HIGH_ENTROPY_RATIO] *= 0.1;
+        fv.features[FeatureVector::PEAK_ENTROPY_RATIO] *= 0.1;
+        fv.features[FeatureVector::ENTROPY_SPIKE_COUNT] = 0;
+    }
+    
     return fv;
 }

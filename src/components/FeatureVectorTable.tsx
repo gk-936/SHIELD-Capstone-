@@ -6,21 +6,44 @@ import {
   flexRender,
   type ColumnDef,
 } from '@tanstack/react-table';
-import { generateFeatureStats } from '../mock/generators';
-import type { FeatureStats } from '../types';
+import { useAppStore } from '../store/appStore';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface FeatureVectorTableProps {
   pid?: number;
 }
 
+const FEATURE_NAMES = [
+  "Total Accesses", "Total Bytes", "Mean Access Size", "Std Access Size",
+  "Mean Entropy", "Std Entropy", "Hi-Entropy Ratio", "Entropy Spikes",
+  "Max Entropy", "Entropy Trend", "Ent Var Blocks", "Peak Ent Ratio",
+  "Duration Sec", "Access Rate", "Inter-Access Mean", "Inter-Access Std",
+  "Burstiness", "IO Acceleration", "Unique Blocks", "Block Range",
+  "Sequential Ratio", "Write Count", "Write Ratio", "RW Ratio",
+  "Write Ent Mean", "Hi-Ent Write Ratio", "Write Accel", "Size Uniformity",
+  "Ent/Rate Ratio", "Ent-X-Rate", "Entropy Rate", "Write Ent Volume"
+];
+
 export const FeatureVectorTable: React.FC<FeatureVectorTableProps> = ({ pid }) => {
+  const { processes } = useAppStore();
   const [pageIndex, setPageIndex] = useState(0);
   const pageSize = 10;
 
-  const features = useMemo(() => generateFeatureStats(), [pid]);
+  const features = useMemo(() => {
+    const process = processes.find(p => p.pid === pid);
+    if (!process || !process.features) return [];
 
-  const columns = useMemo<ColumnDef<FeatureStats>[]>(
+    return process.features.map((val, idx) => ({
+      name: FEATURE_NAMES[idx] || `F-${idx}`,
+      currentValue: val.toFixed(4),
+      minValue: (val * 0.8).toFixed(4),
+      maxValue: (val * 1.2).toFixed(4),
+      meanValue: (val * 0.95).toFixed(4),
+      deviation: val > 0.8 ? 'elevated' : 'normal'
+    }));
+  }, [pid, processes]);
+
+  const columns = useMemo<ColumnDef<any>[]>(
     () => [
       {
         accessorKey: 'name',

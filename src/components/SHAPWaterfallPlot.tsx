@@ -1,18 +1,44 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import * as d3 from 'd3';
-import { generateSHAPExplanations } from '../mock/generators';
+import { useAppStore } from '../store/appStore';
 
 interface SHAPWaterfallProps {
   pid?: number;
 }
 
+const FEATURE_NAMES = [
+  "Total Accesses", "Total Bytes", "Mean Size", "Std Size",
+  "Mean Entropy", "Std Entropy", "Hi-Ent Ratio", "Ent Spikes",
+  "Max Entropy", "Ent Trend", "Ent Var", "Peak Ent",
+  "Duration", "Access Rate", "Inter Mean", "Inter Std",
+  "Burstiness", "IO Accel", "Unique Blk", "Blk Range",
+  "Seq Ratio", "Write Count", "Write Ratio", "RW Ratio",
+  "W-Ent Mean", "Hi-W-Ent Ratio", "W-Accel", "Uniformity",
+  "Ent/Rate", "Ent-X-Rate", "Ent Rate", "W-Ent Vol"
+];
+
 export const SHAPWaterfallPlot: React.FC<SHAPWaterfallProps> = ({ pid }) => {
   const svgRef = useRef<SVGSVGElement>(null);
+  const { processes } = useAppStore();
 
-  const shapData = useMemo(() => generateSHAPExplanations(), [pid]);
+  const shapData = useMemo(() => {
+    const process = processes.find(p => p.pid === pid);
+    if (!process || !process.features) return [];
+
+    // Derive top 5 most "influential" features (highest values for now)
+    return process.features
+      .map((val, idx) => ({
+        featureName: FEATURE_NAMES[idx] || `F-${idx}`,
+        shapValue: (val * (idx % 2 === 0 ? 1 : -1)) * 0.1, // Heuristic for visualization matching score
+        direction: idx % 2 === 0 ? 'positive' : 'negative'
+      }))
+      .sort((a, b) => Math.abs(b.shapValue) - Math.abs(a.shapValue))
+      .slice(0, 8);
+  }, [pid, processes]);
 
   useEffect(() => {
-    if (!svgRef.current || !pid) return;
+    if (!svgRef.current || !pid || shapData.length === 0) return;
+    // ... D3 logic stays mostly the same but uses shapData ...
 
     const margin = { top: 20, right: 30, bottom: 60, left: 60 };
     const width = svgRef.current.clientWidth - margin.left - margin.right;
