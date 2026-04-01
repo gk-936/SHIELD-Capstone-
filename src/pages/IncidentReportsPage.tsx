@@ -9,7 +9,7 @@ import { useAppStore } from '../store/appStore';
 import type { IncidentReport } from '../types';
 import { DecisionLevelBadge } from '../components/SharedComponents';
 import { formatDate, generateSignedUrl } from '../utils/helpers';
-import { Download, DownloadCloud, Eye as EyeIcon } from 'lucide-react';
+import { Download, DownloadCloud, Eye as EyeIcon, FileSearch } from 'lucide-react';
 import { generateIncidentReportPDF } from '../utils/pdfGenerator';
 
 export const IncidentReportsPage: React.FC = () => {
@@ -142,48 +142,63 @@ export const IncidentReportsPage: React.FC = () => {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-neon-cyan mb-4">
             Incident Reports
           </h2>
-          <div className="glass rounded-lg overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-dark-800 sticky top-0 border-b border-dark-600 border-opacity-40">
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <tr key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => (
-                      <th
-                        key={header.id}
-                        className="px-3 py-2 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide"
-                        style={{ width: `${header.getSize()}px` }}
-                      >
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                      </th>
-                    ))}
-                  </tr>
-                ))}
-              </thead>
-              <tbody>
-                {table.getRowModel().rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className={`border-b border-dark-600 border-opacity-20 cursor-pointer transition-all ${
-                      selectedReportId === row.original.reportId
-                        ? 'bg-dark-800'
-                        : 'hover:bg-dark-800 hover:bg-opacity-40'
-                    }`}
-                    onClick={() => setSelectedReportId(row.original.reportId)}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <td
-                        key={cell.id}
-                        className="px-3 py-2"
-                        style={{ width: `${cell.column.getSize()}px`, minWidth: '0px' }}
-                      >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {reportsData.length > 0 ? (
+            <div className="glass rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-dark-800 sticky top-0 border-b border-dark-600 border-opacity-40">
+                  {table.getHeaderGroups().map((headerGroup) => (
+                    <tr key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => (
+                        <th
+                          key={header.id}
+                          className="px-3 py-2 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide"
+                          style={{ width: `${header.getSize()}px` }}
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </th>
+                      ))}
+                    </tr>
+                  ))}
+                </thead>
+                <tbody>
+                  {table.getRowModel().rows.map((row) => (
+                    <tr
+                      key={row.id}
+                      className={`border-b border-dark-600 border-opacity-20 cursor-pointer transition-all ${
+                        selectedReportId === row.original.reportId
+                          ? 'bg-dark-800'
+                          : 'hover:bg-dark-800 hover:bg-opacity-40'
+                      }`}
+                      onClick={() => setSelectedReportId(row.original.reportId)}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <td
+                          key={cell.id}
+                          className="px-3 py-2"
+                          style={{ width: `${cell.column.getSize()}px`, minWidth: '0px' }}
+                        >
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center glass rounded-lg border border-dashed border-white/10">
+              <div className="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center mb-6">
+                <FileSearch className="text-gray-500" size={32} />
+              </div>
+              <h3 className="text-lg font-bold text-gray-200 mb-2">No Reports Generated</h3>
+              <p className="text-gray-500 max-w-sm text-xs leading-relaxed">
+                Detailed forensic reports are generated automatically after a "Critical" threat is neutralized or a manual deep-scan is completed.
+              </p>
+              <div className="mt-8 px-4 py-3 bg-neon-cyan/5 rounded-xl border border-neon-cyan/10">
+                <p className="text-[10px] text-neon-cyan uppercase tracking-widest font-bold">Forensic Engine: Standby</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

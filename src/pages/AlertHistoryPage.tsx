@@ -9,7 +9,7 @@ import { useAppStore } from '../store/appStore';
 import type { Alert } from '../types';
 import { DecisionLevelBadge, ProgressBar } from '../components/SharedComponents';
 import { formatDate, formatDuration, downloadFile, generateCSV } from '../utils/helpers';
-import { Download, Filter, X } from 'lucide-react';
+import { Download, Filter, X, ShieldAlert } from 'lucide-react';
 
 export const AlertHistoryPage: React.FC = () => {
   const { alerts, setCurrentPage, setSelectedProcessPid } = useAppStore();
@@ -264,46 +264,63 @@ export const AlertHistoryPage: React.FC = () => {
 
       {/* Alerts Table */}
       <div className="flex-1 overflow-auto p-4">
-        <div className="glass rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-dark-800 sticky top-0 border-b border-dark-600 border-opacity-40">
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <th
-                      key={header.id}
-                      className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide"
-                      style={{ width: `${header.getSize()}px` }}
-                    >
-                      {flexRender(header.column.columnDef.header, header.getContext())}
-                    </th>
-                  ))}
-                </tr>
-              ))}
-            </thead>
-            <tbody>
-              {table.getRowModel().rows.map((row) => (
-                <tr
-                  key={row.id}
-                  className="border-b border-dark-600 border-opacity-20 hover:bg-dark-800 hover:bg-opacity-40 transition-all cursor-pointer"
-                  onClick={() => {
-                    setSelectedProcessPid(row.original.pid);
-                    setCurrentPage('process-detail');
-                  }}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <td
-                      key={cell.id}
-                      className="px-4 py-3"
-                      style={{ width: `${cell.column.getSize()}px` }}
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="glass rounded-lg overflow-hidden h-full flex flex-col">
+          {filteredAlerts.length > 0 ? (
+            <table className="w-full text-sm">
+              <thead className="bg-dark-800 sticky top-0 border-b border-dark-600 border-opacity-40">
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <tr key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <th
+                        key={header.id}
+                        className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide"
+                        style={{ width: `${header.getSize()}px` }}
+                      >
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                      </th>
+                    ))}
+                  </tr>
+                ))}
+              </thead>
+              <tbody>
+                {table.getRowModel().rows.map((row) => (
+                  <tr
+                    key={row.id}
+                    className="border-b border-dark-600 border-opacity-20 hover:bg-dark-800 hover:bg-opacity-40 transition-all cursor-pointer"
+                    onClick={() => {
+                      setSelectedProcessPid(row.original.pid);
+                      setCurrentPage('process-detail');
+                    }}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <td
+                        key={cell.id}
+                        className="px-4 py-3"
+                        style={{ width: `${cell.column.getSize()}px` }}
+                      >
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
+              <div className="w-20 h-20 bg-neon-cyan/10 rounded-full flex items-center justify-center mb-6 animate-pulse">
+                <ShieldAlert className="text-neon-cyan" size={40} />
+              </div>
+              <h3 className="text-xl font-bold text-gray-100 mb-2">Systems Secure</h3>
+              <p className="text-gray-400 max-w-sm text-sm">
+                No behavioral anomalies or ransomware signatures have been detected in the current monitoring window.
+              </p>
+              <div className="mt-8 flex items-center gap-4 text-[10px] uppercase tracking-[0.2em] text-gray-500">
+                <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-neon-green rounded-full shadow-[0_0_8px_#10b981]" /> eBPF Sensors Active</span>
+                <span className="w-px h-3 bg-white/10" />
+                <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-neon-green rounded-full shadow-[0_0_8px_#10b981]" /> AI Engine Operational</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

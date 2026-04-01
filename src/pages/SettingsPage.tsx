@@ -33,7 +33,7 @@ export const SettingsPage: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#03050a] overflow-hidden bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-[#081225] via-[#03050a] to-[#03050a] p-8">
+    <div className="flex-1 flex flex-col bg-[#03050a] overflow-y-auto bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-[#081225] via-[#03050a] to-[#03050a] p-8">
       <div className="max-w-5xl mx-auto w-full space-y-8">
         
         {/* Header */}
