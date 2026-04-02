@@ -1,4 +1,5 @@
 #include "inference_council.h"
+#include "feature_types.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -12,8 +13,6 @@
 namespace shield {
 
 InferenceCouncil::InferenceCouncil() : last_score_(0.0f) {}
-
-InferenceCouncil::~InferenceCouncil() {}
 
 int InferenceCouncil::Predict(const std::vector<float>& features) {
     if (features.size() < FeatureVector::FEATURE_COUNT) return 0;
