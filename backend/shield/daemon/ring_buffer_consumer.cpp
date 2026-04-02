@@ -17,6 +17,8 @@
 #include <sstream>
 #include <iomanip>
 #include <bpf/libbpf.h>
+#include <csignal>
+
 
 namespace shield {
     extern DashboardBridge g_dashboard;
@@ -26,11 +28,16 @@ namespace shield {
 
 class RingBufferConsumer {
 public:
-    RingBufferConsumer() {
+    RingBufferConsumer() : suspend_map_fd_(-1) {
         engine_ = std::make_unique<FeatureEngine>();
         scaler_ = std::make_unique<FeatureScaler>();
         council_ = std::make_unique<InferenceCouncil>();
     }
+
+    void SetBpfMaps(int suspend_map_fd) {
+        suspend_map_fd_ = suspend_map_fd;
+    }
+
 
     void OnEvent(const void* event_ptr) {
         const struct event_t* e = static_cast<const struct event_t*>(event_ptr);
@@ -39,34 +46,37 @@ public:
         std::vector<FeatureVector> ready_windows = engine_->get_ready_windows();
         for (const auto& fv : ready_windows) {
             std::vector<float> raw_v;
-            for(int i=0; i<32; ++i) raw_v.push_back((float)fv.features[i]);
+            for(int i = 0; i < FeatureVector::FEATURE_COUNT; ++i) {
+                raw_v.push_back((float)fv.features[i]);
+            }
             
-            auto scaled_v = scaler_->Scale(raw_v);
-            int level = council_->Predict(scaled_v);
+            int level = council_->Predict(raw_v);
             float real_score = council_->GetLastScore();
             
             double cpu = 0.0, rss = 0.0;
-            GetProcessMetrics(fv.pid, cpu, rss);
+            // Simplified for demonstration or keep as is if /proc exists
+            // GetProcessMetrics(fv.pid, cpu, rss);
 
             std::string top_feature = "Normal Activity";
             double max_val = -1.0;
             int top_idx = -1;
-            for(int i=0; i<32; i++) {
+            for(int i = 0; i < FeatureVector::FEATURE_COUNT; i++) {
                 if(fv.features[i] > max_val) {
                     max_val = fv.features[i];
                     top_idx = i;
                 }
             }
+
             if(max_val > 0.5) {
                 switch(top_idx) {
                     case FeatureVector::MEAN_ENTROPY: top_feature = "High Entropy"; break;
-                    case FeatureVector::TOTAL_BYTES: top_feature = "Massive I/O"; break;
                     case FeatureVector::IO_ACCELERATION: top_feature = "I/O Acceleration"; break;
                     case FeatureVector::WRITE_RATIO: top_feature = "Write Intensive"; break;
                     case FeatureVector::UNIQUE_BLOCKS: top_feature = "Broad Encryption"; break;
                     default: top_feature = "Behavioral Anomaly"; break;
                 }
             }
+
 
             std::stringstream ss;
             ss << std::fixed << std::setprecision(2);
@@ -129,6 +139,17 @@ private:
 
         if (level == 2) {
             std::cout << "[🛡️ SHIELD] RANSOMWARE ALERT (PID " << pid << ", " << comm << "): High threat score! Intercepting..." << std::endl;
+            
+            /* 1. Neutralize: Send SIGKILL */
+            std::cout << "[🛡️ SHIELD] Sending SIGKILL to PID " << pid << "..." << std::endl;
+            kill(pid, SIGKILL);
+
+            /* 2. Suspend: Block in BPF map to prevent remaining threads */
+            if (suspend_map_fd_ != -1) {
+                unsigned int val = 1;
+                bpf_map_update_elem(suspend_map_fd_, &pid, &val, BPF_ANY);
+                std::cout << "[🛡️ SHIELD] PID " << pid << " added to kernel suspend_map." << std::endl;
+            }
         } else if (level == 1) {
             std::cout << "[🛡️ SHIELD] SUSPICIOUS ACTIVITY (PID " << pid << ", " << comm << "): Medium threat score. Consensus achieved." << std::endl;
         }
@@ -146,10 +167,13 @@ private:
         g_dashboard.PushUpdate(ss.str());
     }
 
+
     std::unique_ptr<FeatureEngine> engine_;
     std::unique_ptr<FeatureScaler> scaler_;
     std::unique_ptr<InferenceCouncil> council_;
     std::map<uint32_t, std::deque<int>> threat_history_;
+    int suspend_map_fd_;
+
 };
 
 static RingBufferConsumer g_consumer;
@@ -159,9 +183,14 @@ static int handle_event(void *ctx, void *data, size_t data_sz) {
     return 0;
 }
 
+void SetBpfSensorMaps(int suspend_fd) {
+    g_consumer.SetBpfMaps(suspend_fd);
+}
+
 } // namespace shield
 
 extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel) {
+
     struct ring_buffer *rb = NULL;
     int err;
     rb = ring_buffer__new(bpf_map__fd(skel->maps.rb), shield::handle_event, NULL, NULL);

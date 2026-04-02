@@ -11,54 +11,43 @@
 struct FeatureVector {
     uint32_t pid;
     char comm[16];
-    double features[32];
+    double features[27];
     
-    /* Feature Index Map based on SHIELD Design Document */
+    /* Feature Index Map: S.H.I.E.L.D. v7.0 Production Layout */
     enum Index {
-        /* Volume Group (0-3) */
+        /* Storage Specialists (0-19) */
         TOTAL_ACCESSES = 0,
-        TOTAL_BYTES,
         MEAN_ACCESS_SIZE,
         STD_ACCESS_SIZE,
-        
-        /* Entropy Group (4-11) */
         MEAN_ENTROPY,
-        STD_ENTROPY,
         HIGH_ENTROPY_RATIO,
-        ENTROPY_SPIKE_COUNT,
-        MAX_ENTROPY,
+        IO_ACCELERATION,
+        BURSTINESS,
+        UNIQUE_BLOCKS,
+        BLOCK_RANGE,
         ENTROPY_TREND,
         ENTROPY_VARIANCE_BLOCKS,
         PEAK_ENTROPY_RATIO,
-        
-        /* Temporal Group (12-17) */
-        DURATION_SEC,
         ACCESS_RATE,
         INTER_ACCESS_MEAN,
         INTER_ACCESS_STD,
-        BURSTINESS,
-        IO_ACCELERATION,
-        
-        /* Spatial Group (18-20) */
-        UNIQUE_BLOCKS,
-        BLOCK_RANGE,
         SEQUENTIAL_RATIO,
-        
-        /* Memory Group (21-26) */
+        WRITE_SIZE_UNIFORMITY,
+        TOTAL_BYTES,
+        READ_COUNT,
+        READ_RATIO,
+
+        /* Memory Specialists (20-25) */
         WRITE_COUNT,
         WRITE_RATIO,
         RW_RATIO,
         WRITE_ENTROPY_MEAN,
         HIGH_ENTROPY_WRITE_RATIO,
-        WRITE_ACCELERATION,
-        
-        /* Derived Group (27-31) */
-        WRITE_SIZE_UNIFORMITY,
-        ENTROPY_ACCESS_RATE_RATIO,
-        ENTROPY_X_RATE,
-        ENTROPY_RATE,
-        WRITE_ENTROPY_VOLUME
+        WRITE_ACCELERATION
     };
+    
+    static const int FEATURE_COUNT = 26;
+
 };
 
 #endif /* __SHIELD_FEATURE_TYPES_H */

@@ -1,0 +1,10 @@
+--- ransmap_features_v2.parquet ---
+Total Columns: 37
+['access_rate', 'block_range', 'burstiness', 'cpu', 'duration_sec', 'entropy_access_rate_ratio', 'entropy_spike_count', 'entropy_trend', 'entropy_variance_blocks', 'family', 'high_entropy_ratio', 'high_entropy_write_ratio', 'inter_access_mean', 'inter_access_std', 'io_acceleration', 'label', 'max_entropy', 'mean_access_size', 'mean_entropy', 'peak_entropy_ratio', 'ram', 'read_count', 'read_ratio', 'rw_ratio', 'sequential_ratio', 'source', 'split', 'std_access_size', 'std_entropy', 'total_accesses', 'total_bytes', 'unique_blocks', 'write_acceleration', 'write_count', 'write_entropy_mean', 'write_ratio', 'write_size_uniformity']
+
+
+--- ransmap_features_v3.parquet ---
+Total Columns: 20
+['access_rate', 'block_range', 'burstiness', 'cpu', 'entropy_trend', 'family', 'high_entropy_ratio', 'inverse_burstiness', 'io_acceleration', 'label', 'max_entropy', 'mean_entropy', 'ram', 'rw_ratio', 'rw_ratio_deviation', 'slow_high_entropy', 'source', 'split', 'total_accesses', 'unique_blocks']
+
+

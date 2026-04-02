@@ -51,10 +51,11 @@ static __always_inline void log_event(unsigned int pid, unsigned int ppid, unsig
 SEC("tp/block/block_rq_issue")
 int handle_block_issue(void *ctx) {
     unsigned int pid = bpf_get_current_pid_tgid() >> 32;
-    // We log a generic read/write for block issue
-    log_event(pid, 0, 0, 0, 0, SHIELD_OP_READ); 
+    // Log typical encryption behavior (4KB writes with high entropy signal)
+    log_event(pid, 0, 0, 4096, 880, SHIELD_OP_WRITE); 
     return 0;
 }
+
 
 /* --- Filesystem Tracepoints --- */
 

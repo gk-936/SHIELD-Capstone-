@@ -1,73 +1,68 @@
 #include "inference_council.h"
-#include <cmath>
-#include <algorithm>
-#include "model_weights.h"
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iostream>
+#include <vector>
+
+#pragma comment(lib, "ws2_32.lib")
 
 namespace shield {
 
-InferenceCouncil::InferenceCouncil() : last_score_(0.0f) {}
-
-static float ScoreTree(const IFNode* nodes, const std::vector<float>& features) {
-    int16_t curr = 0;
-    int16_t depth = 0;
-    
-    // Feature index -2 indicates a leaf in our serialized structure
-    while (nodes[curr].feature != -2) {
-        if (features[nodes[curr].feature] < nodes[curr].threshold) {
-            curr = nodes[curr].left;
-        } else {
-            curr = nodes[curr].right;
-        }
-        depth++;
-        if (depth > 256) break; // Safety break
-    }
-    return static_cast<float>(depth);
+InferenceCouncil::InferenceCouncil() : last_score_(0.0f) {
+    // Initialize Winsock
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
 }
 
-float InferenceCouncil::ScoreIsolationForest(const IFNode* const* trees, int tree_count, const std::vector<float>& features) {
-    if (tree_count <= 0) return 0.5f;
-    
-    float total_depth = 0.0f;
-    for (int i = 0; i < tree_count; ++i) {
-        total_depth += ScoreTree(trees[i], features);
-    }
-    
-    float avg_depth = total_depth / tree_count;
-    // Isolation Forest anomaly score is roughly 2^(-avg_depth / c(n))
-    // We can simplify this for internal ranking since we normalize later.
-    // Higher depth = more benign. Lower depth = more anomalous.
-    // We'll return a score where 1.0 is anomalous, 0.0 is benign.
-    return 1.0f / (1.0f + std::exp(avg_depth * 0.1f)); 
+InferenceCouncil::~InferenceCouncil() {
+    WSACleanup();
 }
 
 int InferenceCouncil::Predict(const std::vector<float>& features) {
-    if (features.size() < (STORAGE_FEAT_COUNT + MEMORY_FEAT_COUNT)) return 0;
-    
-    // 1. Storage Specialist Score (F0..F9)
-    float score_if_s = ScoreIsolationForest(IF_S_TREES, IF_S_TREE_COUNT, features);
-    
-    // 2. Memory Specialist Score (F10..F15)
-    std::vector<float> mem_features(features.begin() + STORAGE_FEAT_COUNT, features.end());
-    // Since we only exported IF_S trees currently, we reuse logic or placeholder for M
-    float score_if_m = 0.5f; 
+    if (features.size() < FeatureVector::FEATURE_COUNT) return 0;
 
-    // 3. Fusion Logic (Sum of weighted normalized scores)
-    // weights index: 0=IF_S, 1=IF_M, 2=IF_Full, 3=HBOS, 4=LOF, 5=Diverse
-    last_score_ = (ENSEMBLE_WEIGHTS[0] * ((score_if_s * MODEL_NORMALIZERS[0].scale) + MODEL_NORMALIZERS[0].min)) +
-                  (ENSEMBLE_WEIGHTS[1] * ((score_if_m * MODEL_NORMALIZERS[1].scale) + MODEL_NORMALIZERS[1].min));
+    SOCKET ConnectSocket = INVALID_SOCKET;
+    struct addrinfo *result = NULL, *ptr = NULL, hints;
 
-    // Normalize final ensemble if needed (not required if sub-models are already normalized)
-    
-    // 4. Thresholding based on final_hybrid_v2.pkl calibration
-    if (last_score_ >= THRESHOLD_RANSOMWARE) return 2; // HIGH
-    if (last_score_ >= THRESHOLD_SUSPICIOUS) return 1; // MEDIUM
-    
-    return 0; // Benign
-}
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
 
-float InferenceCouncil::ScoreHBOS(const std::vector<float>& features) {
-    // Placeholder: Full HBOS logic requires histogram bin exported
-    return 0.5f;
+    // Connect to S.H.I.E.L.D. Async Server (Python)
+    if (getaddrinfo("127.0.0.1", "8888", &hints, &result) != 0) return 0;
+
+    for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
+        ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+        if (ConnectSocket == INVALID_SOCKET) return 0;
+        if (connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen) == SOCKET_ERROR) {
+            closesocket(ConnectSocket);
+            ConnectSocket = INVALID_SOCKET;
+            continue;
+        }
+        break;
+    }
+
+    freeaddrinfo(result);
+    if (ConnectSocket == INVALID_SOCKET) return 0;
+
+    // Send 26 doubles (8 bytes each) to match Python's struct.unpack('26d')
+    // We convert the float vector to double for higher precision communication
+    std::vector<double> d_features(features.begin(), features.end());
+    if (send(ConnectSocket, (char*)d_features.data(), 26 * 8, 0) == SOCKET_ERROR) {
+        closesocket(ConnectSocket);
+        return 0;
+    }
+
+    // Receive decision (1 byte)
+    unsigned char decision = 0;
+    int bytesReceived = recv(ConnectSocket, (char*)&decision, 1, 0);
+    
+    closesocket(ConnectSocket);
+    
+    if (bytesReceived <= 0) return 0; // Error or No Decision
+    
+    return (int)decision; // 0=Benign, 1=Suspicious, 2=Ransomware
 }
 
 } // namespace shield

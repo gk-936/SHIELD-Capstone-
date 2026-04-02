@@ -11,7 +11,9 @@
 
 namespace shield {
     extern DashboardBridge g_dashboard;
+    extern void SetBpfSensorMaps(int suspend_fd);
 }
+
 
 FeatureEngine g_engine;
 extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel);
@@ -81,8 +83,12 @@ int main(int argc, char **argv) {
     pthread_t tid;
     pthread_create(&tid, NULL, status_thread_func, NULL);
 
+    /* Pass BPF map FDs to the consumer for active neutralization */
+    shield::SetBpfSensorMaps(bpf_map__fd(skel->maps.suspend_map));
+
     /* Initialize Ring Buffer Consumption */
     err = handle_ring_buffer(skel);
+
     if (err < 0) {
         fprintf(stderr, "Error polling ring buffer: %d\n", err);
         goto cleanup;
