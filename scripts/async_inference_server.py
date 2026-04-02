@@ -5,7 +5,8 @@ import struct
 import os
 
 # --- MODEL LOADING ---
-MODEL_PATH = r"C:\Users\gokul D\CapstoneML\CapstoneML\shield_hybrid_engine.pkl"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "shield_hybrid_engine.pkl")
 
 class InferenceEngine:
     def __init__(self):

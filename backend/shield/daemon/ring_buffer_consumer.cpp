@@ -93,18 +93,22 @@ public:
             
             g_dashboard.PushUpdate(ss.str());
 
-            auto& history = threat_history_[fv.pid];
-            history.push_back(level);
-            if (history.size() > 3) history.pop_front();
+            if (level == 2) {
+                // Immediate Neutralization for High Confidence Meta-Learner Detection
+                HandleThreat(fv.pid, 2, fv.comm, cpu, rss, top_feature);
+            } else {
+                auto& history = threat_history_[fv.pid];
+                history.push_back(level);
+                if (history.size() > 3) history.pop_front();
 
-            int consensus_level = 0;
-            if (history.size() >= 2) {
-                if (history[history.size()-1] >= 1 && history[history.size()-2] >= 1) consensus_level = 1;
-                if (history.size() == 3 && history[0] == 2 && history[1] == 2 && history[2] == 2) consensus_level = 2;
-            }
+                int consensus_level = 0;
+                if (history.size() >= 2) {
+                    if (history[history.size()-1] >= 1 && history[history.size()-2] >= 1) consensus_level = 1;
+                }
 
-            if (consensus_level > 0) {
-                HandleThreat(fv.pid, consensus_level, fv.comm, cpu, rss, top_feature);
+                if (consensus_level > 0) {
+                    HandleThreat(fv.pid, consensus_level, fv.comm, cpu, rss, top_feature);
+                }
             }
         }
         engine_->prune_inactive_pids();

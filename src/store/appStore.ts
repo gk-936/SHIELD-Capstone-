@@ -17,8 +17,8 @@ interface AppStore extends AppState {
 
 const DEFAULT_SETTINGS: AppState['settings'] = {
   thresholds: { suspicious: 0.5, critical: 0.8 },
-  whitelist: ['systemd', 'dbus-daemon', 'tailscaled', 'kworker'],
-  remoteIp: '100.100.186.46',
+  whitelist: ['systemd', 'dbus-daemon', 'tailscaled', 'kworker', 'node', 'vite'],
+  remoteIp: '127.0.0.1',
   remotePort: 8080,
   autoConnect: true,
   historyLimit: 60
