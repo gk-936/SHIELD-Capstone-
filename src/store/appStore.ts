@@ -114,15 +114,15 @@ export const useAppStore = create<AppStore>((set, get) => {
                   currentMemory: data.mem !== undefined ? data.mem : 0,
                   cgroupMembership: 'user.slice',
                   rankScore: data.score,
-                  decisionLevel: data.level === 2 ? 'HIGH' : data.level === 1 ? 'MEDIUM' : 'BENIGN',
-                  readCount: data.features ? data.features[48] : 0, 
-                  writeCount: data.features ? data.features[48] : 0,
-                  meanEntropy: data.features ? data.features[25] : 0,
-                  highEntropyRatio: data.features ? data.features[27] : 0,
-                  rwRatio: data.features ? data.features[50] : 1.0,
-                  entropyTrend: data.features ? data.features[30] : 0,
-                  ioAcceleration: data.features ? data.features[40] : 0,
-                  writeEntropyVolume: data.features ? data.features[60] : 0,
+                  decisionLevel: data.score > 0.8 ? 'HIGH' : data.score > 0.4 ? 'MEDIUM' : 'BENIGN',
+                  readCount: data.features ? data.features[18] : 0, 
+                  writeCount: data.features ? data.features[20] : 0,
+                  meanEntropy: data.features ? data.features[3] : 0,
+                  highEntropyRatio: data.features ? data.features[4] : 0,
+                  rwRatio: data.features ? data.features[22] : 1.0,
+                  entropyTrend: data.features ? data.features[9] : 0,
+                  ioAcceleration: data.features ? data.features[5] : 0,
+                  writeEntropyVolume: data.features ? data.features[23] : 0,
                   topSHAPFeature: data.top_feature || 'Normal Activity',
                   topSHAPValue: data.top_value || 0,
                   features: data.features,
@@ -136,8 +136,8 @@ export const useAppStore = create<AppStore>((set, get) => {
                   decisionLevel: data.score > 0.65 ? 'HIGH' : data.score > 0.35 ? 'MEDIUM' : 'BENIGN',
                   features: data.features,
                   radarScores: data.radar,
-                  readCount: data.features ? data.features[48] : updatedProcesses[existingProcIdx].readCount,
-                  writeCount: data.features ? data.features[48] : updatedProcesses[existingProcIdx].writeCount
+                  readCount: data.features ? data.features[18] : updatedProcesses[existingProcIdx].readCount,
+                  writeCount: data.features ? data.features[20] : updatedProcesses[existingProcIdx].writeCount
                 };
               } else {
                 updatedProcesses.push(newProc);

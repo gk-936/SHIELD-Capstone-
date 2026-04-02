@@ -17,7 +17,9 @@
 #include <sstream>
 #include <iomanip>
 #include <bpf/libbpf.h>
+#include <bpf/bpf.h>
 #include <csignal>
+#include <linux/bpf.h>
 
 
 namespace shield {

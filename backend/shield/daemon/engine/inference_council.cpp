@@ -1,67 +1,57 @@
 #include "inference_council.h"
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <iostream>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <cmath>
+#include <algorithm>
 #include <vector>
-
-#pragma comment(lib, "ws2_32.lib")
+#include <cstring>
+#include "model_weights.h"
 
 namespace shield {
 
-InferenceCouncil::InferenceCouncil() : last_score_(0.0f) {
-    // Initialize Winsock
-    WSADATA wsaData;
-    WSAStartup(MAKEWORD(2, 2), &wsaData);
-}
+InferenceCouncil::InferenceCouncil() : last_score_(0.0f) {}
 
-InferenceCouncil::~InferenceCouncil() {
-    WSACleanup();
-}
+InferenceCouncil::~InferenceCouncil() {}
 
 int InferenceCouncil::Predict(const std::vector<float>& features) {
     if (features.size() < FeatureVector::FEATURE_COUNT) return 0;
 
-    SOCKET ConnectSocket = INVALID_SOCKET;
-    struct addrinfo *result = NULL, *ptr = NULL, hints;
+    int sock = -1;
+    struct sockaddr_in serv_addr;
 
-    ZeroMemory(&hints, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) return 0;
 
-    // Connect to S.H.I.E.L.D. Async Server (Python)
-    if (getaddrinfo("127.0.0.1", "8888", &hints, &result) != 0) return 0;
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(8888);
 
-    for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
-        ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
-        if (ConnectSocket == INVALID_SOCKET) return 0;
-        if (connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen) == SOCKET_ERROR) {
-            closesocket(ConnectSocket);
-            ConnectSocket = INVALID_SOCKET;
-            continue;
-        }
-        break;
+    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
+        close(sock);
+        return 0;
     }
 
-    freeaddrinfo(result);
-    if (ConnectSocket == INVALID_SOCKET) return 0;
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        close(sock);
+        return 0;
+    }
 
     // Send 26 doubles (8 bytes each) to match Python's struct.unpack('26d')
-    // We convert the float vector to double for higher precision communication
     std::vector<double> d_features(features.begin(), features.end());
-    if (send(ConnectSocket, (char*)d_features.data(), 26 * 8, 0) == SOCKET_ERROR) {
-        closesocket(ConnectSocket);
+    if (send(sock, (char*)d_features.data(), 26 * 8, 0) == -1) {
+        close(sock);
         return 0;
     }
 
     // Receive decision (1 byte)
     unsigned char decision = 0;
-    int bytesReceived = recv(ConnectSocket, (char*)&decision, 1, 0);
+    int bytesReceived = read(sock, (char*)&decision, 1);
     
-    closesocket(ConnectSocket);
+    close(sock);
     
     if (bytesReceived <= 0) return 0; // Error or No Decision
     
+    last_score_ = (float)decision / 2.0f; // Scale decision to 0.0-1.0 roughly
     return (int)decision; // 0=Benign, 1=Suspicious, 2=Ransomware
 }
 
