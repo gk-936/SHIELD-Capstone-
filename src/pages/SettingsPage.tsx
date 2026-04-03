@@ -352,6 +352,9 @@ export const SettingsPage: React.FC = () => {
             <p className="text-gray-400 text-sm mt-1">Configure S.H.I.E.L.D. behavioral engine, connectivity and vault recovery.</p>
           </div>
           <div className="flex gap-3">
+            <button onClick={() => { if(window.confirm('Clear all runtime alerts and reports from the dashboard?')) useAppStore.getState().clearSessionData(); }} className="px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-all flex items-center gap-2 text-sm font-medium">
+              <Trash2 size={16} /> Clear Session Data
+            </button>
             <button onClick={handleReset} className="px-4 py-2 rounded-xl border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition-all flex items-center gap-2 text-sm font-medium">
               <RotateCcw size={16} /> Reset
             </button>

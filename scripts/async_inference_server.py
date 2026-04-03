@@ -107,7 +107,19 @@ async def main():
     global engine
     engine = InferenceEngine()
     
-    server = await asyncio.start_server(handle_client, '127.0.0.1', 8888)
+    SERVER_IP = "127.0.0.1"
+    SERVER_PORT = 8888
+    
+    print(f"🧠 S.H.I.E.L.D. Base-Model Council Server starting on {SERVER_IP}:{SERVER_PORT}")
+    
+    # Pre-Warm the AI Council (Eliminates the 250ms cold-start delay)
+    print("🔥 Pre-warming Deep Learning Council...")
+    dummy_vector = [0.0] * 26
+    for _ in range(5):
+        engine.predict(dummy_vector)
+    print("✅ AI Council Pre-warmed. Neural pathways locked.")
+    
+    server = await asyncio.start_server(handle_client, SERVER_IP, SERVER_PORT)
     addr = server.sockets[0].getsockname()
     print(f'🚀 S.H.I.E.L.D. Active Brain (v7.0) running on {addr}')
 

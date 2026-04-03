@@ -19,7 +19,7 @@ def prep_sandbox():
         with open(filepath, "w") as f:
             chunk = "".join(random.choices(string.ascii_letters + " ", k=FILE_SIZE_KB * 1024))
             f.write(chunk)
-        time.sleep(0.005)
+        time.sleep(0.1)
     
     print(f"✅ Created {FILE_COUNT} files in sandbox.")
 

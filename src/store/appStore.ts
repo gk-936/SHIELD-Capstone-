@@ -124,6 +124,11 @@ export const useAppStore = create<AppStore>((set, get) => {
       set({
         processes: [],
         alerts: [],
+        reportsData: [],
+        enforcementLog: [],
+        tamperLog: [],
+        globalRankHistory: [],
+        systemHealthHistory: [],
         lastAlertedPids: new Map(),
       });
       console.log('[🛡️] Session data cleared.');
