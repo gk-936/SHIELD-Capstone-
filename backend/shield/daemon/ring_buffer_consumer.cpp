@@ -55,60 +55,70 @@ public:
             int level = council_->Predict(raw_v);
             float real_score = council_->GetLastScore();
             
-            double cpu = 0.0, rss = 0.0;
-            // Simplified for demonstration or keep as is if /proc exists
-            // GetProcessMetrics(fv.pid, cpu, rss);
+            // Recency-weighted sliding window (v7.0 Tuning)
+            auto& history = threat_scores_[fv.pid];
+            history.push_back(real_score);
+            if (history.size() > 6) history.pop_front(); // 60s window (assuming 10s steps)
 
+            float rank_score = 0.0f;
+            float weight = 1.0f;
+            float total_weight = 0.0f;
+            for (auto it = history.rbegin(); it != history.rend(); ++it) {
+                rank_score += (*it) * weight;
+                total_weight += weight;
+                weight *= 0.85f; // Recency decay factor
+            }
+            // Scale rank score to reflect accumulation
+            // If sustained 0.48 for 2 windows, rank_score = 0.48*1.0 + 0.48*0.85 = 0.888 (> 0.59)
+            // If just 1 window of 0.48, rank_score = 0.48 (> 0.35)
+
+            int final_level = 0;
+            if (rank_score >= THRESHOLD_RANSOMWARE) final_level = 2; // HIGH (0.59)
+            else if (rank_score >= THRESHOLD_SUSPICIOUS) final_level = 1; // MEDIUM (0.35)
+
+            double cpu = 0.0, rss = 0.0;
+            // GetProcessMetrics(fv.pid, cpu, rss);
+            
             std::string top_feature = "Normal Activity";
+            // ... (keep top_feature logic)
             double max_val = -1.0;
             int top_idx = -1;
-            for(int i = 0; i < FeatureVector::FEATURE_COUNT; i++) {
-                if(fv.features[i] > max_val) {
-                    max_val = fv.features[i];
+            for(int i = 0; i < (int)raw_v.size(); i++) {
+                if(raw_v[i] > max_val) {
+                    max_val = raw_v[i];
                     top_idx = i;
                 }
             }
 
             if(max_val > 0.5) {
                 switch(top_idx) {
-                    case FeatureVector::MEAN_ENTROPY: top_feature = "High Entropy"; break;
-                    case FeatureVector::IO_ACCELERATION: top_feature = "I/O Acceleration"; break;
-                    case FeatureVector::WRITE_RATIO: top_feature = "Write Intensive"; break;
-                    case FeatureVector::UNIQUE_BLOCKS: top_feature = "Broad Encryption"; break;
+                    case 3: top_feature = "High Entropy"; break; // MEAN_ENTROPY
+                    case 5: top_feature = "I/O Acceleration"; break; // IO_ACCELERATION
+                    case 16: top_feature = "Write Intensive"; break; // WRITE_SIZE_UNIFORMITY
+                    case 7: top_feature = "Broad Encryption"; break; // UNIQUE_BLOCKS
                     default: top_feature = "Behavioral Anomaly"; break;
                 }
             }
 
-
             std::stringstream ss;
             ss << std::fixed << std::setprecision(2);
+            // Send both instantaneous score and sliding rank score
             ss << "{\"type\":\"window_update\", \"pid\":" << fv.pid 
                << ", \"comm\":\"" << fv.comm 
-               << "\", \"score\":" << real_score 
-               << ", \"level\":" << level
+               << "\", \"score\":" << rank_score 
+               << ", \"instant_score\":" << real_score
+               << ", \"level\":" << final_level
                << ", \"cpu\":" << cpu
                << ", \"mem\":" << rss
                << ", \"top_feature\":\"" << top_feature << "\""
-               << ", \"top_value\":" << max_val << "}";
+               << ", \"top_value\":" << max_val 
+               << ", \"radar\":" << "[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]" // Radar placeholder
+               << "}";
             
             g_dashboard.PushUpdate(ss.str());
 
-            if (level == 2) {
-                // Immediate Neutralization for High Confidence Meta-Learner Detection
-                HandleThreat(fv.pid, 2, fv.comm, cpu, rss, top_feature);
-            } else {
-                auto& history = threat_history_[fv.pid];
-                history.push_back(level);
-                if (history.size() > 3) history.pop_front();
-
-                int consensus_level = 0;
-                if (history.size() >= 2) {
-                    if (history[history.size()-1] >= 1 && history[history.size()-2] >= 1) consensus_level = 1;
-                }
-
-                if (consensus_level > 0) {
-                    HandleThreat(fv.pid, consensus_level, fv.comm, cpu, rss, top_feature);
-                }
+            if (final_level > 0) {
+                HandleThreat(fv.pid, final_level, fv.comm, cpu, rss, top_feature);
             }
         }
         engine_->prune_inactive_pids();
@@ -177,7 +187,7 @@ private:
     std::unique_ptr<FeatureEngine> engine_;
     std::unique_ptr<FeatureScaler> scaler_;
     std::unique_ptr<InferenceCouncil> council_;
-    std::map<uint32_t, std::deque<int>> threat_history_;
+    std::map<uint32_t, std::deque<float>> threat_scores_;
     int suspend_map_fd_;
 
 };

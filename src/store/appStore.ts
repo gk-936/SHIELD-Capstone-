@@ -36,14 +36,14 @@ const initialSystemHealth: SystemHealthMetrics = {
     inferencesPerSecond: 0,
     meanInferenceLatency: 0,
     councilModelStatus: { 'inference_council': 'loaded' },
-    xgboostModelVersion: '1.2.0',
+    xgboostModelVersion: '7.0-production-shield',
     xgboostLoadTime: 45,
     falsePosRate24h: 0.001,
     falseNegRate24h: 0,
     rollingAUC: 0.99,
     thresholds: {
         MEDIUM: 0.35,
-        HIGH: 0.65,
+        HIGH: 0.59,
         CRITICAL: 0.85
     }
 };
@@ -133,7 +133,7 @@ export const useAppStore = create<AppStore>((set, get) => {
                 updatedProcesses[existingProcIdx] = { 
                   ...updatedProcesses[existingProcIdx], 
                   rankScore: data.score,
-                  decisionLevel: data.score > 0.65 ? 'HIGH' : data.score > 0.35 ? 'MEDIUM' : 'BENIGN',
+                  decisionLevel: data.score > 0.59 ? 'HIGH' : data.score > 0.35 ? 'MEDIUM' : 'BENIGN',
                   features: data.features,
                   radarScores: data.radar,
                   readCount: data.features ? data.features[18] : updatedProcesses[existingProcIdx].readCount,

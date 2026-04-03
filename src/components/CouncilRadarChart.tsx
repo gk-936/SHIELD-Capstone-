@@ -13,20 +13,23 @@ export const CouncilRadarChart: React.FC<CouncilRadarChartProps> = ({ pid }) => 
   const data = useMemo(() => {
     const process = processes.find(p => p.pid === pid);
     if (!process || !process.radarScores) return [
-      { model: 'Overall', score: 0 },
       { model: 'IF_storage', score: 0 },
       { model: 'IF_memory', score: 0 },
+      { model: 'IF_full', score: 0 },
       { model: 'HBOS', score: 0 },
       { model: 'LOF', score: 0 },
+      { model: 'IF_diverse', score: 0 },
     ];
 
     const s = process.radarScores;
+    // s[0-5] mapped to the 6 models
     return [
-      { model: 'Overall', score: s[0] * 100 },
-      { model: 'IF_storage', score: s[1] * 100 },
-      { model: 'IF_memory', score: s[2] * 100 },
-      { model: 'HBOS', score: s[3] * 100 },
-      { model: 'LOF', score: s[4] * 100 },
+      { model: 'IF_storage', score: (s[0] || 0) * 100 },
+      { model: 'IF_memory', score: (s[1] || 0) * 100 },
+      { model: 'IF_full', score: (s[2] || 0) * 100 },
+      { model: 'HBOS', score: (s[3] || 0) * 100 },
+      { model: 'LOF', score: (s[4] || 0) * 100 },
+      { model: 'IF_diverse', score: (s[5] || 0) * 100 },
     ];
   }, [pid, processes]);
 

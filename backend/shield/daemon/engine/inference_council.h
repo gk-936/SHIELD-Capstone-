@@ -19,13 +19,16 @@ public:
     int Predict(const std::vector<float>& features);
 
     float GetLastScore() const { return last_score_; }
+    const std::vector<float>& GetLastRadarScores() const { return last_radar_scores_; }
 
 private:
-    // Model scoring methods
-    float ScoreIsolationForest(const IFNode* const* trees, int tree_count, const std::vector<float>& features);
+    float ScoreIForest(const std::vector<float>& features, const struct IFNode* tree_base, int tree_count);
     float ScoreHBOS(const std::vector<float>& features);
+    float ScoreLOF(const std::vector<float>& features);
+    float ScoreXGBoost(const std::vector<float>& g_features);
 
     float last_score_;
+    std::vector<float> last_radar_scores_;
 };
 
 } // namespace shield

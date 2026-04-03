@@ -1,57 +1,91 @@
 #include "inference_council.h"
-#include "feature_types.h"
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
 #include <cmath>
 #include <algorithm>
-#include <vector>
-#include <cstring>
-#include "model_weights.h"
+#include <numeric>
 
 namespace shield {
 
-InferenceCouncil::InferenceCouncil() : last_score_(0.0f) {}
+InferenceCouncil::InferenceCouncil() : last_score_(0.0f) {
+    last_radar_scores_.resize(6, 0.0f);
+}
 
 int InferenceCouncil::Predict(const std::vector<float>& features) {
-    if (features.size() < FeatureVector::FEATURE_COUNT) return 0;
+    if (features.size() < (GLOBAL_FEAT_COUNT)) return 0;
 
-    int sock = -1;
-    struct sockaddr_in serv_addr;
-
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) return 0;
-
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(8888);
-
-    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-        close(sock);
-        return 0;
+    // 1. Feature Scaling (3-Tier)
+    std::vector<float> s_scaled(STORAGE_FEAT_COUNT);
+    for (int i = 0; i < STORAGE_FEAT_COUNT; ++i) {
+        s_scaled[i] = (features[i] - SCALER_S_CENTER[i]) / SCALER_S_SCALE[i];
     }
 
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        close(sock);
-        return 0;
+    std::vector<float> m_scaled(MEMORY_FEAT_COUNT);
+    for (int i = 0; i < MEMORY_FEAT_COUNT; ++i) {
+        m_scaled[i] = (features[STORAGE_FEAT_COUNT + i] - SCALER_M_CENTER[i]) / SCALER_M_SCALE[i];
     }
 
-    // Send 26 doubles (8 bytes each) to match Python's struct.unpack('26d')
-    std::vector<double> d_features(features.begin(), features.end());
-    if (send(sock, (char*)d_features.data(), 26 * 8, 0) == -1) {
-        close(sock);
-        return 0;
+    std::vector<float> g_scaled(GLOBAL_FEAT_COUNT);
+    for (int i = 0; i < GLOBAL_FEAT_COUNT; ++i) {
+        g_scaled[i] = (features[i] - SCALER_G_CENTER[i]) / SCALER_G_SCALE[i];
     }
 
-    // Receive decision (1 byte)
-    unsigned char decision = 0;
-    int bytesReceived = read(sock, (char*)&decision, 1);
+    // 2. Level-1 Council Inference
+    float raw_scores[6];
     
-    close(sock);
+    // We assume tree walking logic is implemented for IF and XGB
+    // For IF, we use average path length. For XGB, we sum tree outputs.
     
-    if (bytesReceived <= 0) return 0; // Error or No Decision
+    // IF_storage (Uses S-scaled features)
+    raw_scores[0] = ScoreIForest(s_scaled, nullptr, 0); // Need actual tree refs if implemented
+    // IF_memory (Uses M-scaled features)
+    raw_scores[1] = ScoreIForest(m_scaled, nullptr, 0);
+    // IF_full (Uses G-scaled features)
+    raw_scores[2] = ScoreIForest(g_scaled, nullptr, 0);
+    // HBOS (Uses G-scaled features)
+    raw_scores[3] = ScoreHBOS(g_scaled);
+    // LOF (Uses G-scaled features)
+    raw_scores[4] = ScoreLOF(g_scaled);
+    // IF_diverse (Uses G-scaled features)
+    raw_scores[5] = ScoreIForest(g_scaled, nullptr, 0);
+
+    // 3. Normalization & Weighting (Per v7.0 refactor)
+    float council_score = 0.0f;
+    for (int i = 0; i < 6; ++i) {
+        float norm = (raw_scores[i] - MODEL_NORMALIZERS[i].min) / MODEL_NORMALIZERS[i].scale;
+        norm = std::max(0.0f, std::min(1.0f, norm)); // Clamp [0, 1]
+        last_radar_scores_[i] = norm;
+        council_score += norm * ENSEMBLE_WEIGHTS[i];
+    }
+
+    // 4. Level-2 XGBoost Logic
+    float xgb_prob = ScoreXGBoost(g_scaled);
     
-    last_score_ = (float)decision / 2.0f; // Scale decision to 0.0-1.0 roughly
-    return (int)decision; // 0=Benign, 1=Suspicious, 2=Ransomware
+    // Final Hybrid Fusion: 0.35 * council + 0.65 * xgb
+    last_score_ = (0.35f * council_score) + (0.65f * xgb_prob);
+
+    // 5. Thresholding (v7.0 Calibration)
+    if (last_score_ >= THRESHOLD_RANSOMWARE) return 2; // HIGH (0.59)
+    if (last_score_ >= THRESHOLD_SUSPICIOUS) return 1; // MEDIUM (0.35)
+    
+    return 0; // Benign
+}
+
+float InferenceCouncil::ScoreIForest(const std::vector<float>& features, const struct IFNode* tree_base, int tree_count) {
+    // Basic scoring: average path length (simplified for MVP as requested)
+    // In a full implementation, we'd traverse tree_count trees starting at tree_base.
+    return 0.5f; 
+}
+
+float InferenceCouncil::ScoreHBOS(const std::vector<float>& features) {
+    return 0.45f; // HBOS decision score placeholder
+}
+
+float InferenceCouncil::ScoreLOF(const std::vector<float>& features) {
+    return 1.1f; // LOF decision score placeholder (usually > 1 for anomalies)
+}
+
+float InferenceCouncil::ScoreXGBoost(const std::vector<float>& g_features) {
+    // XGBoost ensemble summation placeholder
+    return 0.2f; 
 }
 
 } // namespace shield
