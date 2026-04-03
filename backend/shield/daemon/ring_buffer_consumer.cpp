@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include "forensic_manager.hpp"
 
 namespace shield {
     extern DashboardBridge g_dashboard;
@@ -39,6 +40,9 @@ public:
         scaler_ = std::make_unique<FeatureScaler>();
         council_ = std::make_unique<InferenceCouncil>();
         
+        // v7.5 - Initialize Persistence & Recovery
+        ForensicManager::Get().Init("scripts/shield_sandbox", ".shield_vault");
+
         known_registry_ = {"node", "npm", "apt", "dpkg", "apt-get", "systemd", "tailscaled"};
         
         g_dashboard.SetMessageCallback([this](const std::string& msg) {
@@ -263,7 +267,14 @@ private:
            << ", \"top_feature\":\"" << top_feature << "\""
            << ", \"technique\":\"T1486\", \"description\":\"Active Blockade Policy Applied\"}";
         
-        g_dashboard.PushUpdate(ss.str());
+        std::string alert_json = ss.str();
+        ForensicManager::Get().LogAlert(alert_json);
+        g_dashboard.PushUpdate(alert_json);
+
+        // Stage 5 Rollback: Snapshot on first suspicious level
+        if (level == 1) {
+            ForensicManager::Get().CreateSnapshot(pid, comm);
+        }
     }
 
     std::unique_ptr<FeatureEngine> engine_;

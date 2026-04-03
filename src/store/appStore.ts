@@ -12,7 +12,9 @@ interface AppStore extends AppState {
   // Real-time integration
   globalRankHistory: { time: string, score: number }[];
   systemHealthHistory: { time: string, eps: number, latency: number }[];
+  socket: WebSocket | null;
   connectWebSocket: () => void;
+  triggerRollback: (pid: number) => void;
   updateSettings: (settings: Partial<AppState['settings']>) => void;
 }
 
@@ -63,6 +65,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     enforcementLog: [],
     globalRankHistory: [], 
     systemHealthHistory: [],
+    socket: null,
     scalerRecalibration: {
         lastRecalibration: Date.now(),
         nextScheduled: Date.now() + 3600000,
@@ -79,6 +82,14 @@ export const useAppStore = create<AppStore>((set, get) => {
     updateProcesses: (processes) => set({ processes }),
     updateAlerts: (alerts) => set({ alerts }),
     updateConnectionStatus: (status) => set({ connectionStatus: status }),
+    triggerRollback: (pid: number) => {
+        const { socket } = get();
+        if (socket && (socket.readyState === WebSocket.OPEN || (socket as any).readyState === 1)) {
+            socket.send(JSON.stringify({ type: 'rollback_request', pid }));
+            console.log(`[🛡️] Rollback request sent for context PID: ${pid}`);
+        }
+    },
+
     updateSettings: (newSettings) => {
       set((state) => {
         const updatedSettings = { ...state.settings, ...newSettings };
@@ -101,8 +112,9 @@ export const useAppStore = create<AppStore>((set, get) => {
       if (ws) return;
 
       console.log("[🛡️] Connecting to S.H.I.E.L.D. Daemon...");
-      const { remoteIp, remotePort } = get().settings;
-      ws = new WebSocket(`ws://${remoteIp}:${remotePort}`);
+      const { settings } = get();
+      ws = new WebSocket(`ws://${settings.remoteIp}:${settings.remotePort}`);
+      set({ socket: ws });
 
       ws.onopen = () => {
         set({ connectionStatus: { connected: true, lastHeartbeat: Date.now() } });

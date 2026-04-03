@@ -229,39 +229,35 @@ export const IncidentReportsPage: React.FC = () => {
               <DecisionLevelBadge level={selectedReport.severity} size="sm" />
             </div>
 
-            {/* Download Buttons */}
+            {/* Download & Recovery Buttons */}
             <div className="flex items-center gap-3 mt-4">
               <button
                 onClick={async () => {
                   setGeneratingLink('pdf');
                   generateIncidentReportPDF(selectedReport);
-                  
                   setGeneratingLink(null);
                 }}
-                className="flex items-center gap-2 px-3 py-2 bg-neon-cyan bg-opacity-20 text-neon-cyan rounded hover:bg-opacity-30 transition-all text-sm"
+                className="flex items-center gap-2 px-3 py-2 bg-neon-cyan bg-opacity-10 text-neon-cyan border border-neon-cyan/20 rounded hover:bg-opacity-20 transition-all text-sm font-semibold"
               >
                 <Download size={14} />
                 PDF
               </button>
-              <button
-                onClick={async () => {
-                  setGeneratingLink('json');
-                  const url = await generateSignedUrl(selectedReport.reportId, 'json'); window.location.href = url;
-                  
-                  setGeneratingLink(null);
-                }}
-                className="flex items-center gap-2 px-3 py-2 bg-neon-cyan bg-opacity-20 text-neon-cyan rounded hover:bg-opacity-30 transition-all text-sm"
-              >
-                <Download size={14} />
-                JSON
-              </button>
-              <button
-                className="flex items-center gap-2 px-3 py-2 bg-neon-amber bg-opacity-20 text-neon-amber rounded hover:bg-opacity-30 transition-all text-sm"
-                title="Requires additional security certificate"
-              >
-                <DownloadCloud size={14} />
-                Forensic Archive
-              </button>
+              
+              {selectedReport.severity === 'CRITICAL' && (
+                <button
+                  onClick={() => {
+                    const confirm = window.confirm("⚠️ WARNING: This will permanently overwrite current sandbox files with the secure vault snapshot. Proceed with Rollback?");
+                    if (confirm) {
+                      const { triggerRollback } = useAppStore.getState();
+                      triggerRollback(Number(selectedReport.affectedPid));
+                    }
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-neon-amber bg-opacity-20 text-neon-amber border border-neon-amber/40 rounded hover:bg-opacity-30 transition-all text-sm font-bold animate-pulse"
+                >
+                  <DownloadCloud size={14} />
+                  ROLLBACK SYSTEM
+                </button>
+              )}
             </div>
           </div>
 

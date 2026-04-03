@@ -17,6 +17,7 @@
 #include <openssl/buffer.h>
 #include <functional>
 #include <poll.h>
+#include "forensic_manager.hpp"
 
 namespace shield {
 
@@ -101,6 +102,13 @@ private:
                         std::lock_guard<std::mutex> lock(clients_mutex_);
                         client_fds_.push_back(new_socket);
                         std::cout << "[🛡️] Dashboard client connected." << std::endl;
+                        
+                        // v7.5 - Push forensic history on connection
+                        std::vector<std::string> history = ForensicManager::Get().GetHistory();
+                        for (const auto& alert : history) {
+                            std::vector<uint8_t> frame = CreateWebSocketFrame(alert);
+                            send(new_socket, frame.data(), frame.size(), MSG_NOSIGNAL);
+                        }
                     } else {
                         close(new_socket);
                     }
@@ -155,6 +163,16 @@ private:
         }
 
         std::string message((char*)payload.data(), payload_len);
+        
+        // v7.5 - Handle Internal Rollback Commands
+        if (message.find("\"type\":\"rollback_request\"") != std::string::npos) {
+            size_t pid_pos = message.find("\"pid\":");
+            if (pid_pos != std::string::npos) {
+                uint32_t pid = std::stoi(message.substr(pid_pos + 6));
+                ForensicManager::Get().Rollback(pid);
+            }
+        }
+        
         if (message_callback_) {
             message_callback_(message);
         }
