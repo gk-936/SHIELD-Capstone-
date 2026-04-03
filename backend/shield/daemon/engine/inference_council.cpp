@@ -2,6 +2,12 @@
 #include <cmath>
 #include <algorithm>
 #include <numeric>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <cstring>
+#include <iostream>
 
 namespace shield {
 
@@ -10,81 +16,81 @@ InferenceCouncil::InferenceCouncil() : last_score_(0.0f) {
 }
 
 int InferenceCouncil::Predict(const std::vector<float>& features) {
-    if (features.size() < (GLOBAL_FEAT_COUNT)) return 0;
+    if (features.size() < 26) return 0;
 
-    // 1. Feature Scaling (3-Tier)
-    std::vector<float> s_scaled(STORAGE_FEAT_COUNT);
-    for (int i = 0; i < STORAGE_FEAT_COUNT; ++i) {
-        s_scaled[i] = (features[i] - SCALER_S_CENTER[i]) / SCALER_S_SCALE[i];
+    // --- PROTOCOL: CONNECT TO PYTHON ML BRAIN ---
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return 0; 
+
+    struct sockaddr_in serv_addr;
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(8888);
+    inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+
+    // Set timeout (100ms) to prevent daemon lag
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        close(sock);
+        // Fallback: Use a very simple local heuristic if brain is offline
+        float entropy = features[3]; // MEAN_ENTROPY
+        if (entropy > 0.9) return 1; 
+        return 0;
     }
 
-    std::vector<float> m_scaled(MEMORY_FEAT_COUNT);
-    for (int i = 0; i < MEMORY_FEAT_COUNT; ++i) {
-        m_scaled[i] = (features[STORAGE_FEAT_COUNT + i] - SCALER_M_CENTER[i]) / SCALER_M_SCALE[i];
+    // 1. Send Features (26 doubles = 208 bytes)
+    std::vector<double> d_feats;
+    for(float f : features) d_feats.push_back((double)f);
+    
+    if (send(sock, d_feats.data(), d_feats.size() * sizeof(double), 0) < 0) {
+        close(sock);
+        return 0;
     }
 
-    std::vector<float> g_scaled(GLOBAL_FEAT_COUNT);
-    for (int i = 0; i < GLOBAL_FEAT_COUNT; ++i) {
-        g_scaled[i] = (features[i] - SCALER_G_CENTER[i]) / SCALER_G_SCALE[i];
+    // 2. Receive Decision (1 byte) + Radar Scores (6 doubles = 48 bytes) = 49 bytes
+    uint8_t response[49];
+    int valread = recv(sock, response, 49, 0);
+    close(sock);
+
+    if (valread == 49) {
+        int decision = response[0];
+        
+        // Extract 6 Radar Scores
+        double radar[6];
+        memcpy(radar, response + 1, 48);
+        
+        last_radar_scores_.clear();
+        for(int i=0; i<6; i++) last_radar_scores_.push_back((float)radar[i]);
+        
+        // Update last_score_ for UI consistency
+        float sum = 0;
+        for(float r : last_radar_scores_) sum += r;
+        last_score_ = sum / 6.0f; 
+
+        return decision;
     }
 
-    // 2. Level-1 Council Inference
-    float raw_scores[6];
-    
-    // We assume tree walking logic is implemented for IF and XGB
-    // For IF, we use average path length. For XGB, we sum tree outputs.
-    
-    // IF_storage (Uses S-scaled features)
-    raw_scores[0] = ScoreIForest(s_scaled, nullptr, 0); // Need actual tree refs if implemented
-    // IF_memory (Uses M-scaled features)
-    raw_scores[1] = ScoreIForest(m_scaled, nullptr, 0);
-    // IF_full (Uses G-scaled features)
-    raw_scores[2] = ScoreIForest(g_scaled, nullptr, 0);
-    // HBOS (Uses G-scaled features)
-    raw_scores[3] = ScoreHBOS(g_scaled);
-    // LOF (Uses G-scaled features)
-    raw_scores[4] = ScoreLOF(g_scaled);
-    // IF_diverse (Uses G-scaled features)
-    raw_scores[5] = ScoreIForest(g_scaled, nullptr, 0);
-
-    // 3. Normalization & Weighting (Per v7.0 refactor)
-    float council_score = 0.0f;
-    for (int i = 0; i < 6; ++i) {
-        float norm = (raw_scores[i] - MODEL_NORMALIZERS[i].min) / MODEL_NORMALIZERS[i].scale;
-        norm = std::max(0.0f, std::min(1.0f, norm)); // Clamp [0, 1]
-        last_radar_scores_[i] = norm;
-        council_score += norm * ENSEMBLE_WEIGHTS[i];
-    }
-
-    // 4. Level-2 XGBoost Logic
-    float xgb_prob = ScoreXGBoost(g_scaled);
-    
-    // Final Hybrid Fusion: 0.35 * council + 0.65 * xgb
-    last_score_ = (0.35f * council_score) + (0.65f * xgb_prob);
-
-    // 5. Thresholding (v7.0 Calibration)
-    if (last_score_ >= THRESHOLD_RANSOMWARE) return 2; // HIGH (0.59)
-    if (last_score_ >= THRESHOLD_SUSPICIOUS) return 1; // MEDIUM (0.35)
-    
-    return 0; // Benign
+    return 0;
 }
 
 float InferenceCouncil::ScoreIForest(const std::vector<float>& features, const struct IFNode* tree_base, int tree_count) {
-    // Basic scoring: average path length (simplified for MVP as requested)
-    // In a full implementation, we'd traverse tree_count trees starting at tree_base.
     return 0.5f; 
 }
 
 float InferenceCouncil::ScoreHBOS(const std::vector<float>& features) {
-    return 0.45f; // HBOS decision score placeholder
+    return 0.45f;
 }
 
 float InferenceCouncil::ScoreLOF(const std::vector<float>& features) {
-    return 1.1f; // LOF decision score placeholder (usually > 1 for anomalies)
+    return 1.1f;
 }
 
 float InferenceCouncil::ScoreXGBoost(const std::vector<float>& g_features) {
-    // XGBoost ensemble summation placeholder
     return 0.2f; 
 }
 

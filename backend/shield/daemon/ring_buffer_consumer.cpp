@@ -21,6 +21,8 @@
 #include <csignal>
 #include <linux/bpf.h>
 #include <unordered_set>
+#include <regex>
+#include <unistd.h>
 
 namespace shield {
     extern DashboardBridge g_dashboard;
@@ -48,11 +50,48 @@ public:
         throttle_map_fd_ = throttle_map_fd;
     }
 
+    bool IsKernelComm(const char* comm) {
+        static const std::regex k_regex("^(kworker|jbd2|ext4-rsv|migration|rcu_|softirq|cpuhp).*");
+        return std::regex_match(comm, k_regex);
+    }
+
+    void ReadProcessMetrics(uint32_t pid, double &cpu, double &rss) {
+        cpu = 0.0; rss = 0.0;
+        
+        // 1. Read RSS from /proc/[pid]/status
+        std::string status_path = "/proc/" + std::to_string(pid) + "/status";
+        std::ifstream status_file(status_path);
+        if (status_file.is_open()) {
+            std::string line;
+            while (std::getline(status_file, line)) {
+                if (line.compare(0, 6, "VmRSS:") == 0) {
+                    std::stringstream ss(line.substr(6));
+                    uint64_t kb;
+                    ss >> kb;
+                    rss = kb / 1024.0; // MB
+                    break;
+                }
+            }
+        }
+
+        // 2. Read CPU from /proc/[pid]/stat (Simplified snapshot)
+        std::string stat_path = "/proc/" + std::to_string(pid) + "/stat";
+        std::ifstream stat_file(stat_path);
+        if (stat_file.is_open()) {
+            std::string tmp;
+            for(int i=0; i<13; ++i) stat_file >> tmp; // Skip to utime
+            uint64_t utime, stime;
+            stat_file >> utime >> stime;
+            cpu = (double)(utime + stime) / sysconf(_SC_CLK_TCK); 
+            // Note: This is total CPU time, not instantaneous percentage. 
+            // In a full implementation, we'd compare against previous snapshots.
+        }
+    }
+
     void OnDashboardMessage(const std::string& msg) {
         if (msg.find("\"type\":\"registry_update\"") != std::string::npos) {
             std::cout << "[🛡️] Dashboard updated Known-Process Registry." << std::endl;
             
-            // Very simple manual parsing of ["a","b"] format
             std::unordered_set<std::string> new_registry;
             size_t list_start = msg.find("[");
             size_t list_end = msg.find("]");
@@ -61,19 +100,22 @@ public:
                 std::stringstream ss(list_content);
                 std::string item;
                 while (std::getline(ss, item, ',')) {
-                    // Remove quotes and whitespace
                     item.erase(std::remove(item.begin(), item.end(), '\"'), item.end());
                     item.erase(std::remove(item.begin(), item.end(), ' '), item.end());
                     if (!item.empty()) new_registry.insert(item);
                 }
                 known_registry_ = new_registry;
-                std::cout << "[🛡️] Registry synchronized: " << known_registry_.size() << " processes trusted for throttling." << std::endl;
+                std::cout << "[🛡️] Registry synchronized: " << known_registry_.size() << " processes trusted." << std::endl;
             }
         }
     }
 
     void OnEvent(const void* event_ptr) {
         const struct event_t* e = static_cast<const struct event_t*>(event_ptr);
+        
+        // Immediate Kernel Filter (No scoring for kernel threads)
+        if (IsKernelComm(e->comm)) return;
+        
         engine_->push_event(*e);
         
         std::vector<FeatureVector> ready_windows = engine_->get_ready_windows();
@@ -83,11 +125,11 @@ public:
                 raw_v.push_back((float)fv.features[i]);
             }
             
-            council_->Predict(raw_v); // Instantaneous prediction results are updated in council state
-            float real_score = council_->GetLastScore();
+            int final_level = council_->Predict(raw_v); 
+            float instant_score = council_->GetLastScore();
             
             auto& history = threat_scores_[fv.pid];
-            history.push_back(real_score);
+            history.push_back(instant_score);
             if (history.size() > 6) history.pop_front();
 
             float rank_score = 0.0f;
@@ -97,12 +139,8 @@ public:
                 weight *= 0.85f;
             }
 
-            int final_level = 0;
-            if (rank_score >= 0.59f) final_level = 2; // HIGH
-            else if (rank_score >= 0.35f) final_level = 1; // MEDIUM
-
             double cpu = 0.0, rss = 0.0;
-            // GetProcessMetrics(fv.pid, cpu, rss);
+            ReadProcessMetrics(fv.pid, cpu, rss);
             
             std::string top_feature = "Normal Activity";
             double max_val = -1.0;
@@ -124,18 +162,26 @@ public:
                 }
             }
 
+            std::vector<float> radar = council_->GetLastRadarScores();
+            std::stringstream radar_ss;
+            radar_ss << "[";
+            for(size_t i=0; i<radar.size(); ++i) {
+                radar_ss << std::fixed << std::setprecision(2) << radar[i] << (i == radar.size()-1 ? "" : ",");
+            }
+            radar_ss << "]";
+
             std::stringstream ss;
             ss << std::fixed << std::setprecision(2);
             ss << "{\"type\":\"window_update\", \"pid\":" << fv.pid 
                << ", \"comm\":\"" << fv.comm 
                << "\", \"score\":" << rank_score 
-               << ", \"instant_score\":" << real_score
-               << ", \"level\":" << final_level
+               << ", \"instant_score\":" << instant_score
+               << ", \"level\":" << (int)final_level
                << ", \"cpu\":" << cpu
                << ", \"mem\":" << rss
                << ", \"top_feature\":\"" << top_feature << "\""
                << ", \"top_value\":" << max_val 
-               << ", \"radar\":" << "[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]"
+               << ", \"radar\":" << radar_ss.str()
                << "}";
             
             g_dashboard.PushUpdate(ss.str());
@@ -149,28 +195,22 @@ public:
 
 private:
     void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature) {
-        if (pid < 1000) return; // Basic kernel/system protection
+        if (pid < 1000) return; 
 
         bool is_known = known_registry_.count(std::string(comm)) > 0;
         std::string outcome = "Neutralized";
 
         if (level == 2) {
             if (is_known) {
-                std::cout << "[🛡️] Known-Process Match (" << comm << "). Overriding HIGH -> MEDIUM. Initiating Throttling..." << std::endl;
-                
-                // Initiate Throttling in BPF
+                std::cout << "[🛡️] Known-Process Match (" << comm << "). Initiating BPF Throttling..." << std::endl;
                 if (throttle_map_fd_ != -1) {
-                    struct throttle_cfg cfg = {
-                        .rate_limit_bps = 512 * 1024, // 512 KB/s
-                        .current_window_start = 0,
-                        .bytes_in_current_window = 0
-                    };
+                    struct throttle_cfg cfg = { .rate_limit_bps = 512 * 1024, .current_window_start = 0, .bytes_in_current_window = 0 };
                     bpf_map_update_elem(throttle_map_fd_, &pid, &cfg, BPF_ANY);
                     outcome = "Throttled";
-                    level = 1; // Downgrade to MEDIUM for dashboard
+                    level = 1; 
                 }
             } else {
-                std::cout << "[🛡️] RANSOMWARE ALERT (PID " << pid << ", " << comm << "). Intercepting..." << std::endl;
+                std::cout << "[🛡️] RANSOMWARE ALERT (PID " << pid << ", " << comm << "). Neutralizing..." << std::endl;
                 kill(pid, SIGKILL);
                 if (suspend_map_fd_ != -1) {
                     unsigned int val = 1;
@@ -178,7 +218,6 @@ private:
                 }
             }
         } else if (level == 1) {
-            std::cout << "[🛡️] SUSPICIOUS ACTIVITY (PID " << pid << ", " << comm << "). Monitoring window active." << std::endl;
             outcome = "Monitoring";
         }
 
@@ -190,8 +229,8 @@ private:
            << "\", \"outcome\":\"" << outcome
            << "\", \"cpu\":" << cpu
            << ", \"mem\":" << rss
-           << "\", \"top_feature\":\"" << top_feature
-           << "\", \"technique\":\"T1486\", \"description\":\"Data Encrypted for Impact\"}";
+           << ", \"top_feature\":\"" << top_feature << "\""
+           << ", \"technique\":\"T1486\", \"description\":\"Active Blockade Policy Applied\"}";
         
         g_dashboard.PushUpdate(ss.str());
     }
