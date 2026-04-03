@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
 import { useAppStore } from '../store/appStore';
-import { generateRelatedProcesses, generateProcessInfo } from '../mock/generators';
 import { DecisionLevelBadge } from './SharedComponents';
 import { GitBranch } from 'lucide-react';
 
@@ -16,12 +15,14 @@ export const RelatedProcesses: React.FC<RelatedProcessesProps> = ({
 }) => {
   const { setCurrentPage, setSelectedProcessPid } = useAppStore();
 
+  const { processes } = useAppStore();
+  
   const { parent, children } = useMemo(() => {
     return {
-      parent: parentPid ? generateProcessInfo(parentPid) : null,
-      children: generateRelatedProcesses(3),
+      parent: parentPid ? processes.find(p => p.pid === parentPid) || null : null,
+      children: processes.filter(p => p.parentPid === pid),
     };
-  }, [pid, parentPid]);
+  }, [pid, parentPid, processes]);
 
   const handleProcessClick = (selectedPid: number) => {
     setSelectedProcessPid(selectedPid);

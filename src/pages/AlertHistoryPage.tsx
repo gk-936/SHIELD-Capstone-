@@ -182,9 +182,9 @@ export const AlertHistoryPage: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-y-auto bg-dark-900">
+    <div className="flex-1 flex flex-col overflow-hidden bg-dark-900">
       {/* Filters Bar */}
-      <div className="glass border-b border-dark-700 border-opacity-40 px-6 py-4">
+      <div className="glass border-b border-dark-700 border-opacity-40 px-6 py-4 flex-shrink-0">
         <div className="flex items-center gap-4 mb-3">
           <Filter size={18} className="text-neon-cyan" />
           <h2 className="text-sm font-semibold uppercase tracking-wide">Filters</h2>

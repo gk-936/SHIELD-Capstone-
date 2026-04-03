@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AppState, ProcessInfo, Alert, ConnectionStatus, SystemHealthMetrics, IncidentReport } from '../types';
+import type { AppState, ProcessInfo, Alert, ConnectionStatus, SystemHealthMetrics, IncidentReport, EnforcementAction } from '../types';
 
 interface AppStore extends AppState {
   // State update methods
@@ -59,7 +59,8 @@ export const useAppStore = create<AppStore>((set, get) => {
     alerts: [],
     reportsData: [],
     tamperLog: [],
-    globalRankHistory: [], // Live history for the main chart
+    enforcementLog: [],
+    globalRankHistory: [], 
     scalerRecalibration: {
         lastRecalibration: Date.now(),
         nextScheduled: Date.now() + 3600000,
@@ -145,7 +146,7 @@ export const useAppStore = create<AppStore>((set, get) => {
                 updatedProcesses[existingProcIdx] = { 
                   ...updatedProcesses[existingProcIdx], 
                   rankScore: data.score,
-                  decisionLevel: data.score > 0.59 ? 'HIGH' : data.score > 0.35 ? 'MEDIUM' : 'BENIGN',
+                  decisionLevel: data.score >= 0.59 ? 'HIGH' : data.score >= 0.35 ? 'MEDIUM' : 'BENIGN',
                   features: data.features,
                   radarScores: data.radar,
                   readCount: data.features ? data.features[18] : updatedProcesses[existingProcIdx].readCount,
@@ -177,12 +178,12 @@ export const useAppStore = create<AppStore>((set, get) => {
                 timestamp: Date.now(),
                 pid: data.pid,
                 processName: data.comm,
-                peakLevel: data.level === 'HIGH' ? 'HIGH' : 'MEDIUM',
+                peakLevel: data.score >= 0.59 ? 'HIGH' : 'MEDIUM',
                 peakScore: data.score || (data.level === 'HIGH' ? 0.88 : 0.45),
                 duration: 500,
-                outcome: 'Active',
+                outcome: data.outcome === 'Neutralized' ? 'Killed' : 'Active',
                 reportAvailable: true,
-                latestScores: data.radar || [0.1, 0.2, data.level === 'HIGH' ? 0.8 : 0.4]
+                latestScores: data.radar || [0.1, 0.2, data.score >= 0.59 ? 0.8 : 0.4]
               };
 
               const newReport: IncidentReport = {
@@ -221,9 +222,20 @@ export const useAppStore = create<AppStore>((set, get) => {
               
               const updatedAlerts = [newAlert, ...state.alerts].slice(0, 50);
               const updatedReports = [newReport, ...state.reportsData].slice(0, 20);
+
+              // Push to Enforcement Log for Forensic Trace
+              const newEnforcement: EnforcementAction = {
+                timestamp: Date.now(),
+                pid: Number(data.pid),
+                action: data.outcome === 'Neutralized' ? 'SIGKILL' : 'throttle_applied',
+                triggeringRankScore: Number(data.score) || 0.88,
+                description: `S.H.I.E.L.D. ${data.outcome} policy applied to ${data.comm}`
+              };
+
               return { 
                 alerts: updatedAlerts,
-                reportsData: updatedReports
+                reportsData: updatedReports,
+                enforcementLog: [newEnforcement, ...state.enforcementLog].slice(0, 100)
               };
             });
           } else if (data.type === 'status_update') {

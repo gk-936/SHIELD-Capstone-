@@ -109,6 +109,7 @@ export interface eBPFEvent {
 // Enforcement action
 export interface EnforcementAction {
   timestamp: number;
+  pid: number;
   action: 'throttle_applied' | 'throttle_released' | 'SIGSTOP' | 'SIGCONT' | 'SIGKILL';
   triggeringRankScore: number;
   description: string;
@@ -245,6 +246,7 @@ export interface AppState {
   processDetail?: ProcessDetail;
   reportsData: IncidentReport[];
   tamperLog: TamperEvent[];
+  enforcementLog: EnforcementAction[];
   scalerRecalibration: ScalerRecalibrationInfo;
   settings: Settings;
 }

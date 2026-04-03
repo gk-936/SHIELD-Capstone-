@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { generateEnforcementActions } from '../mock/generators';
+import { useAppStore } from '../store/appStore';
+import { DecisionLevelBadge } from './SharedComponents';
 import { formatTime } from '../utils/helpers';
 import { Zap } from 'lucide-react';
 
@@ -8,7 +9,11 @@ interface EnforcementHistoryProps {
 }
 
 export const EnforcementHistory: React.FC<EnforcementHistoryProps> = ({ pid }) => {
-  const actions = useMemo(() => generateEnforcementActions(), [pid]);
+  const { enforcementLog } = useAppStore();
+  
+  const actions = useMemo(() => {
+    return enforcementLog.filter(a => a.pid === pid);
+  }, [pid, enforcementLog]);
 
   const getActionColor = (action: string) => {
     if (action.includes('SIGKILL')) return '#ff4444';
