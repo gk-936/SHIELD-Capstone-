@@ -48,8 +48,23 @@ std::vector<FeatureVector> FeatureEngine::get_ready_windows() {
         
         uint64_t latest_ts = buf.events.back().timestamp_ns;
         
-        /* Check if 10s step has passed since last calculation */
-        if (latest_ts >= buf.last_feature_calculation_time_ns + step_ns) {
+        /* 
+         * Check if window is ready. Two triggers:
+         * 1. Time-based: 100ms has elapsed since last window
+         * 2. Event-based: Ultra-fast ransomware (like ransomtest.py) can encrypt 100 files in <50ms,
+         *    meaning it never hits the time threshold. Force a window if >30 events pile up.
+         */
+        bool time_ready = (latest_ts >= buf.last_feature_calculation_time_ns + step_ns);
+        bool events_ready = (buf.events.size() >= 30 && latest_ts == buf.events.back().timestamp_ns);
+        
+        // Count how many events since we last calculated (estimate by finding first event strictly after calculation)
+        int new_events = 0;
+        for (auto it = buf.events.rbegin(); it != buf.events.rend(); ++it) {
+            if (it->timestamp_ns <= buf.last_feature_calculation_time_ns) break;
+            new_events++;
+        }
+
+        if (time_ready || new_events >= 30) {
             results.push_back(calculate_features(pid, buf));
             buf.last_feature_calculation_time_ns = latest_ts;
         }

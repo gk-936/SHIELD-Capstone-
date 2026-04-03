@@ -287,11 +287,14 @@ private:
         if (pid < 1000) return;
 
         // v9.0 — Throttle First, Kill Later
-        // Kill ONLY after 3+ consecutive high-scoring windows (0.3s at 100ms step).
-        // NO single-window kills — prevents outlier false positives.
-        // BPF throttling at score > 0.74 slows ransomware during the 0.3s build-up.
-        // Damped tools (node × 0.40 = 0.40) can NEVER reach 0.85 even over infinite windows.
-        bool requires_kill = (rank_score > 0.85f && history_size >= 3);
+        // Path 1: Sustained threat — 3+ consecutive high-scoring windows (0.3s at 100ms step)
+        // Path 2: Extreme confidence — instant_score >= 0.90 on a SINGLE window
+        //         This is implicit FP-safe: damped processes can NEVER reach 0.90
+        //         (node × 0.40 = 0.40 max, git × 0.25 = 0.25 max)
+        //         Only undamped processes (actual ransomware) can cross 0.90.
+        // BPF throttling at score > 0.74 also slows ransomware during any build-up.
+        bool requires_kill = (rank_score > 0.85f && history_size >= 3)
+                          || (instant_score >= 0.90f);
 
         // Alert Cooldown: 30 seconds per PID for observations, but bypass cooldown for an actual KILL
         auto now = std::chrono::steady_clock::now();
