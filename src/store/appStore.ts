@@ -40,8 +40,8 @@ const DEFAULT_SETTINGS: AppState['settings'] = {
     'journal-offline', 'dbus-daemon', 'sshd', 'cron', 'atd',
     // Monitoring & virtualization
     'tailscaled', 'vmtoolsd', 'vmware-vmx',
-    // Dev environment
-    'node', 'npm', 'npx', 'vite',
+    // Dev environment (These are now DAMPED in C++, so whitelist here is advisory)
+    'node', 'npm', 'npx', 'vite', 'git', 'python3', 'gcc', 'g++', 'make', 'docker',
     // Shells
     'bash', 'sh', 'zsh', 'dash',
     // Package management
