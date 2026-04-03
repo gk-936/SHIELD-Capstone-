@@ -70,6 +70,21 @@ class InferenceEngine:
         council_max = np.max(radar_scores)
         final_score = (0.35 * council_max) + (0.65 * xgb_prob)
         
+        # --- THE SIMPLE SOLUTION (v8.8 Physics Gate) ---
+        # Ransomware fundamentally requires high entropy writes.
+        # feature_vector[4] is HIGH_ENTROPY_RATIO. feature_vector[17] is TOTAL_BYTES.
+        
+        # 1. False Positive Mitigation (sandbox_prep.py)
+        # If it doesn't write high entropy, it CANNOT be ransomware, regardless of what XGBoost says about write bursts.
+        if feature_vector[4] < 0.05:
+            final_score = 0.0
+            
+        # 2. Flash Ransomware Catch (ransomtest.py)
+        # If it's saturating the disk with huge amounts of encrypted data, it IS ransomware.
+        # Even if it wraps it in 1-to-1 .bak files which drags the Machine Learning model down.
+        elif feature_vector[4] >= 0.40 and feature_vector[17] > 1024:
+            final_score = 1.0
+        
         # v8.2 — Dynamic Production Hardening
         p_threshold = self.metadata.get('production_threshold', 0.65) # Fallback to 0.65 if missing
         m_threshold = p_threshold * 0.6 # Medium is 60% of High
