@@ -183,12 +183,9 @@ public:
                 final_level = council_->Predict(raw_v); 
                 float raw_score = council_->GetLastScore();
                 
-                // v8.4 — Secure Damping & Critical Overrides
+                // v9.0 — Damping ALWAYS applies, no bypass.
+                // Damped tools (node, git, npm) can never reach kill threshold.
                 float damping = GetDampingFactor(fv.comm);
-                
-                // CRITICAL OVERRIDE: If AI confidence is extreme (>0.95), bypass damping factor
-                if (raw_score > 0.95f) damping = 1.0f; 
-                
                 instant_score = raw_score * damping;
 
                 // Stage 5 Rollback: Snapshot on extremely suspicious activity early
@@ -289,11 +286,12 @@ private:
     void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature, float rank_score, float instant_score, double high_entropy_ratio, size_t history_size, std::string radar_json) {
         if (pid < 1000) return;
 
-        // v8.5: If the damped rank_score hits >0.85 over 6 windows, it's a persistent, confirmed threat.
-        // v8.7 (Flash Bypass & FP Mitigation): 
-        // We drop the instant panic requirement to >0.80 for ultra-fast 'ransomtest.py'
-        // BUT we enforce HIGH_ENTROPY_RATIO > 10% to guarantee `sandbox_prep.py` (plaintext writes) is completely ignored.
-        bool requires_kill = (rank_score > 0.85f && history_size >= 6) || (instant_score >= 0.80f && high_entropy_ratio > 0.1);
+        // v9.0 — Throttle First, Kill Later
+        // Kill ONLY after 3+ consecutive high-scoring windows (0.3s at 100ms step).
+        // NO single-window kills — prevents outlier false positives.
+        // BPF throttling at score > 0.74 slows ransomware during the 0.3s build-up.
+        // Damped tools (node × 0.40 = 0.40) can NEVER reach 0.85 even over infinite windows.
+        bool requires_kill = (rank_score > 0.85f && history_size >= 3);
 
         // Alert Cooldown: 30 seconds per PID for observations, but bypass cooldown for an actual KILL
         auto now = std::chrono::steady_clock::now();

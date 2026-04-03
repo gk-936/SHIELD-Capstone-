@@ -72,15 +72,31 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    // --- SELF-PID EXCLUSION (v7.2) ---
-    // Tell the kernel sensors to ignore THIS process to avoid the self-monitoring loop
+    // --- SELF-PID EXCLUSION (v9.0) ---
+    // Tell the kernel sensors to ignore SHIELD infrastructure processes
     {
-        unsigned int self_pid = getpid();
-        unsigned int val = 1;
         int self_map_fd = bpf_map__fd(skel->maps.self_pid_map);
         if (self_map_fd >= 0) {
+            // 1. Exclude the daemon itself
+            unsigned int self_pid = getpid();
+            unsigned int val = 1;
             bpf_map_update_elem(self_map_fd, &self_pid, &val, BPF_ANY);
             printf("[🛡️] Registered Self-PID %u for Kernel Silence.\n", self_pid);
+
+            // 2. Exclude the Python inference server (port 8888)
+            // Find the PID by scanning /proc for the process listening on port 8888
+            FILE* fp = popen("ss -tlnp 'sport = :8888' 2>/dev/null | grep -oP 'pid=\\K[0-9]+' | head -1", "r");
+            if (fp) {
+                char pid_buf[32] = {0};
+                if (fgets(pid_buf, sizeof(pid_buf), fp)) {
+                    unsigned int brain_pid = (unsigned int)atoi(pid_buf);
+                    if (brain_pid > 0) {
+                        bpf_map_update_elem(self_map_fd, &brain_pid, &val, BPF_ANY);
+                        printf("[🛡️] Registered Brain-PID %u (inference server) for Kernel Silence.\n", brain_pid);
+                    }
+                }
+                pclose(fp);
+            }
         }
     }
 

@@ -70,26 +70,16 @@ class InferenceEngine:
         council_max = np.max(radar_scores)
         final_score = (0.35 * council_max) + (0.65 * xgb_prob)
         
-        # --- THE SIMPLE SOLUTION (v8.9 True Physics Gate) ---
-        # NOTE: The BPF sensor currently hardcodes entropy (880), so feature 4 is ALWAYS 1.0. We cannot use it.
-        # Instead, we evaluate the absolute physical necessity of Ransomware: It MUST READ files locally to encrypt them.
-        # feature_vector[19] is READ_RATIO. feature_vector[17] is TOTAL_BYTES.
-        
-        # 1. False Positive Mitigation (sandbox_prep.py, git clone, npm install)
-        # If a process is purely writing data and mathematically skipping READ cycles, 
-        # it is impossible for it to be ransomware encrypting the local disk!
+        # --- v9.0 Physics Gate: False Positive Mitigation ONLY ---
+        # We trust the AI model's hybrid fusion score for detection.
+        # The physics gate ONLY overrides DOWNWARD to protect known-safe patterns.
+        # It NEVER overrides UPWARD (no final_score = 1.0) — that caused false positives.
+        #
+        # feature_vector[19] = READ_RATIO
+        # Ransomware MUST read files to encrypt them. A write-only process (read_ratio ≈ 0)
+        # is physically incapable of being ransomware.
         if feature_vector[19] < 0.05:
             final_score = 0.0
-            
-        # 2. Flash Ransomware Catch
-        # Ransomware MUST read files AND write encrypted versions back. This creates a distinctive
-        # pattern: balanced read-write ratio + high write volume + AI model agreement.
-        # Conditions are deliberately strict to avoid false positives on build tools (node, gcc)
-        # and other Python scripts (including potentially the inference server itself).
-        # feature[19] = READ_RATIO, feature[21] = WRITE_RATIO, feature[17] = log1p(TOTAL_BYTES)
-        elif (feature_vector[19] > 0.15 and feature_vector[21] > 0.30
-              and feature_vector[17] > 13.0 and xgb_prob > 0.50):
-            final_score = 1.0
         
         # v8.2 — Dynamic Production Hardening
         p_threshold = self.metadata.get('production_threshold', 0.65) # Fallback to 0.65 if missing
