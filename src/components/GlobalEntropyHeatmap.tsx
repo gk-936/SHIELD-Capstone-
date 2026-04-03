@@ -20,19 +20,22 @@ function getDeepHeatmapColor(entropy: number): string {
 }
 
 export const GlobalEntropyHeatmap: React.FC = () => {
-  const { processes, setCurrentPage, setSelectedProcessPid } = useAppStore();   
+  const { processes, settings, setCurrentPage, setSelectedProcessPid } = useAppStore();   
 
   const heatmapCells = useMemo(() => {
-    const whitelist = ['systemd', 'tailscaled', 'vmtoolsd', 'dbus-daemon', 'systemd-journal', 'systemd-journald'];
-    const active = processes.filter(p => (p.meanEntropy > 0 || p.rankScore > 0.1) && !whitelist.includes(p.processName));
-    const sorted = [...active].sort((a, b) => b.rankScore - a.rankScore).slice(0, 36);
+    // Synchronize with global store whitelist
+    const whitelist = settings.whitelist || [];
+    
+    // Lower threshold to 0.1 to show more active system processes
+    const active = processes.filter(p => (p.meanEntropy > 0.1 || p.rankScore > 0.05) && !whitelist.includes(p.processName));
+    const sorted = [...active].sort((a, b) => b.meanEntropy - a.meanEntropy).slice(0, 36);
     
     const padded = [...sorted];
     while (padded.length < 36) {
       padded.push(undefined as unknown as ProcessInfo);
     }
     return padded;
-  }, [processes]);
+  }, [processes, settings.whitelist]);
 
   const handleCellClick = (pid: number) => {
     setSelectedProcessPid(pid);

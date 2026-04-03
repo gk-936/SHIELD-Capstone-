@@ -13,6 +13,7 @@ interface AppStore extends AppState {
   globalRankHistory: { time: string, score: number }[];
   systemHealthHistory: { time: string, eps: number, latency: number }[];
   socket: WebSocket | null;
+  lastAlertedPids: Map<number, number>; // pid -> timestamp
   connectWebSocket: () => void;
   triggerRollback: (pid: number) => void;
   updateSettings: (settings: Partial<AppState['settings']>) => void;
@@ -20,7 +21,19 @@ interface AppStore extends AppState {
 
 const DEFAULT_SETTINGS: AppState['settings'] = {
   thresholds: { suspicious: 0.5, critical: 0.8 },
-  whitelist: ['systemd', 'tailscaled', 'vmtoolsd', 'journal-offline', 'dbus-daemon', 'sshd', 'systemd-journal', 'systemd-journald'],
+  whitelist: [
+    // Core system
+    'systemd', 'systemd-journal', 'systemd-journald', 'systemd-udevd',
+    'journal-offline', 'dbus-daemon', 'sshd', 'cron', 'atd',
+    // Monitoring & virtualization
+    'tailscaled', 'vmtoolsd', 'vmware-vmx',
+    // Dev environment
+    'node', 'npm', 'npx', 'vite',
+    // Shells
+    'bash', 'sh', 'zsh', 'dash',
+    // Package management
+    'apt', 'apt-get', 'dpkg',
+  ],
   remoteIp: '127.0.0.1',
   remotePort: 8080,
   autoConnect: true,
@@ -66,6 +79,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     globalRankHistory: [], 
     systemHealthHistory: [],
     socket: null,
+    lastAlertedPids: new Map<number, number>(),
     scalerRecalibration: {
         lastRecalibration: Date.now(),
         nextScheduled: Date.now() + 3600000,
@@ -185,6 +199,15 @@ export const useAppStore = create<AppStore>((set, get) => {
               };
             });
           } else if (data.type === 'alert_update') {
+            // --- Frontend PID cooldown: 30s deduplication ---
+            const now = Date.now();
+            const lastAlerted = get().lastAlertedPids.get(data.pid);
+            if (lastAlerted && now - lastAlerted < 30000) return;
+            const newPidMap = new Map(get().lastAlertedPids);
+            newPidMap.set(data.pid, now);
+            set({ lastAlertedPids: newPidMap });
+            // -------------------------------------------------
+
             set((state) => {
               const newAlert: Alert = {
                 alertId: `alert-${Date.now()}-${data.pid}`,
@@ -236,6 +259,38 @@ export const useAppStore = create<AppStore>((set, get) => {
               const updatedAlerts = [newAlert, ...state.alerts].slice(0, 50);
               const updatedReports = [newReport, ...state.reportsData].slice(0, 20);
 
+              // v7.5 - Sync alerted PID with the main process list for visual consistency
+              const updatedProcesses = [...state.processes];
+              const existingIdx = updatedProcesses.findIndex(p => p.pid === data.pid);
+              
+              const syncProc: ProcessInfo = {
+                pid: data.pid,
+                processName: data.comm,
+                executablePath: `/proc/${data.pid}/exe`,
+                startTime: Date.now(),
+                currentCpu: data.cpu || 0,
+                currentMemory: data.mem || 0,
+                cgroupMembership: 'user.slice',
+                rankScore: data.score || 0.88,
+                decisionLevel: (data.score || 0.88) >= 0.59 ? 'HIGH' : 'MEDIUM',
+                readCount: 0,
+                writeCount: 0,
+                meanEntropy: 6.5, // Assumed for trigger
+                highEntropyRatio: 0.8,
+                rwRatio: 1.0,
+                entropyTrend: 0,
+                ioAcceleration: 0,
+                writeEntropyVolume: 0,
+                topSHAPFeature: data.top_feature || 'Anomalous Activity',
+                topSHAPValue: data.score || 0.88,
+              };
+
+              if (existingIdx !== -1) {
+                updatedProcesses[existingIdx] = { ...updatedProcesses[existingIdx], rankScore: syncProc.rankScore, decisionLevel: syncProc.decisionLevel };
+              } else {
+                updatedProcesses.push(syncProc);
+              }
+
               // Push to Enforcement Log for Forensic Trace
               const newEnforcement: EnforcementAction = {
                 timestamp: Date.now(),
@@ -248,6 +303,7 @@ export const useAppStore = create<AppStore>((set, get) => {
               return { 
                 alerts: updatedAlerts,
                 reportsData: updatedReports,
+                processes: updatedProcesses.sort((a, b) => b.rankScore - a.rankScore).slice(0, 50),
                 enforcementLog: [newEnforcement, ...state.enforcementLog].slice(0, 100)
               };
             });

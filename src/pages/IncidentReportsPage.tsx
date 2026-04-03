@@ -13,7 +13,7 @@ import { Download, DownloadCloud, Eye as EyeIcon, FileSearch } from 'lucide-reac
 import { generateIncidentReportPDF } from '../utils/pdfGenerator';
 
 export const IncidentReportsPage: React.FC = () => {
-  const { reportsData } = useAppStore();
+  const { reportsData, triggerRollback } = useAppStore();
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [generatingLink, setGeneratingLink] = useState<string | null>(null);
 
@@ -243,12 +243,12 @@ export const IncidentReportsPage: React.FC = () => {
                 PDF
               </button>
               
-              {selectedReport.severity === 'CRITICAL' && (
+              {/* ROLLBACK — shown for any non-benign alert */}
+              {(selectedReport.severity === 'HIGH' || selectedReport.severity === 'MEDIUM') && (
                 <button
                   onClick={() => {
-                    const confirm = window.confirm("⚠️ WARNING: This will permanently overwrite current sandbox files with the secure vault snapshot. Proceed with Rollback?");
-                    if (confirm) {
-                      const { triggerRollback } = useAppStore.getState();
+                    const ok = window.confirm("⚠️ WARNING: This will restore sandbox files from the secure vault snapshot taken just before the attack. Proceed with Rollback?");
+                    if (ok) {
                       triggerRollback(Number(selectedReport.affectedPid));
                     }
                   }}

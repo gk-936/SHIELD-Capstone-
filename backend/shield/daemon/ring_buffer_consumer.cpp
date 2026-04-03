@@ -75,10 +75,21 @@ public:
         return std::regex_match(comm, k_regex);
     }
 
-    // v7.2 Deep Trust for infrastructure tools to avoid False Positives
+    // v7.5 Deep Trust — processes silenced BEFORE feature engine
+    // Covers: system infrastructure, dev tooling, and known high-entropy benign processes
     bool IsDeepTrusted(const char* comm) {
         static const std::unordered_set<std::string> deep_trust = {
-            "systemd", "tailscaled", "vmtoolsd", "journal-offline", "dbus-daemon", "sshd"
+            // Core system
+            "systemd", "systemd-journal", "systemd-journald", "systemd-udevd",
+            "journal-offline", "dbus-daemon", "sshd", "cron", "atd",
+            // Monitoring & virtualization
+            "tailscaled", "vmtoolsd", "vmware-vmx", "VGAuthService",
+            // Dev environment (high-entropy I/O but trusted)
+            "node", "npm", "npx", "vite",
+            // Shell & scripting (spawned by user, not threat)
+            "bash", "sh", "zsh", "dash",
+            // Package management
+            "apt", "apt-get", "dpkg",
         };
         return deep_trust.count(std::string(comm)) > 0;
     }
@@ -230,7 +241,16 @@ public:
 
 private:
     void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature, float score, std::string radar_json) {
-        if (pid < 1000) return; 
+        if (pid < 1000) return;
+
+        // Alert Cooldown: 30 seconds per PID to prevent alert storm
+        auto now = std::chrono::steady_clock::now();
+        auto cit = alert_cooldown_.find(pid);
+        if (cit != alert_cooldown_.end()) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cit->second).count();
+            if (elapsed < 30) return;
+        }
+        alert_cooldown_[pid] = now;
 
         bool is_known = known_registry_.count(std::string(comm)) > 0;
         std::string outcome = "Neutralized";
@@ -282,6 +302,7 @@ private:
     std::unique_ptr<InferenceCouncil> council_;
     std::map<uint32_t, std::deque<float>> threat_scores_;
     std::unordered_set<std::string> known_registry_;
+    std::map<uint32_t, std::chrono::steady_clock::time_point> alert_cooldown_;
     int suspend_map_fd_;
     int throttle_map_fd_;
     std::atomic<uint64_t> total_events_;
