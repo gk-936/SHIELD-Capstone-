@@ -46,18 +46,32 @@ static __always_inline void log_event(unsigned int pid, unsigned int ppid, unsig
     bpf_ringbuf_submit(e, 0);
 }
 
-/* --- Storage Tracepoints --- */
+/* --- Syscall Sensors (Hardened v7.1) --- */
 
-SEC("tp/block/block_rq_issue")
-int handle_block_issue(void *ctx) {
+SEC("tp/syscalls/sys_enter_write")
+int handle_write_enter(struct trace_event_raw_sys_enter *ctx) {
     unsigned int pid = bpf_get_current_pid_tgid() >> 32;
-    // Log typical encryption behavior (4KB writes with high entropy signal)
-    log_event(pid, 0, 0, 4096, 880, SHIELD_OP_WRITE); 
+    unsigned int size = (unsigned int)BPF_CORE_READ(ctx, args[2]);
+
+    // 1KB Filter: Ignore noise, only see heavy I/O
+    if (size < 1024) return 0;
+
+    // Use a high-entropy signal (880) for sizable writes.
+    // In a future update, we can sample the buffer ctx->args[1] for real entropy calculation.
+    log_event(pid, 0, 0, size, 880, SHIELD_OP_WRITE); 
     return 0;
 }
 
+SEC("tp/syscalls/sys_enter_read")
+int handle_read_enter(struct trace_event_raw_sys_enter *ctx) {
+    unsigned int pid = bpf_get_current_pid_tgid() >> 32;
+    unsigned int size = (unsigned int)BPF_CORE_READ(ctx, args[2]);
 
-/* --- Filesystem Tracepoints --- */
+    if (size < 1024) return 0;
+
+    log_event(pid, 0, 0, size, 0, SHIELD_OP_READ); 
+    return 0;
+}
 
 SEC("tp/syscalls/sys_enter_rename")
 int handle_rename_enter(void *ctx) {
@@ -73,42 +87,37 @@ int handle_unlink_enter(void *ctx) {
     return 0;
 }
 
-/* --- LSM Throttling --- */
+/* --- LSM Throttling (Enforcement) --- */
 
 SEC("lsm/file_permission")
 int BPF_PROG(shield_file_permission, struct file *file, int mask) {
     unsigned int pid = bpf_get_current_pid_tgid() >> 32;
 
     struct throttle_cfg *cfg = bpf_map_lookup_elem(&throttle_map, &pid);
-    if (cfg && (mask & 2)) { // Write permission check (MAY_WRITE = 2)
+    if (cfg && (mask & 2)) {
         unsigned long long now = bpf_ktime_get_ns();
-        unsigned long long window_size = 100000000; // 100ms window
+        unsigned long long window_size = 100000000; 
 
         if (now - cfg->current_window_start > window_size) {
             cfg->current_window_start = now;
             cfg->bytes_in_current_window = 0;
         }
 
-        // Check if budget for this 100ms window is exceeded (rate_limit_bps / 10)
         unsigned long long budget = cfg->rate_limit_bps / 10;
         if (cfg->bytes_in_current_window > budget) {
-            return -1; // -EPERM / -EACCES: Force slowdown through error retries
+            return -1; 
         }
 
-        // Accumulate (Assumed 4KB average for block level, but we can't easily get write size here precisely)
-        // We accumulate a fixed chunk to throttle operation count
         cfg->bytes_in_current_window += 4096; 
     }
 
     unsigned int *suspended = bpf_map_lookup_elem(&suspend_map, &pid);
     if (suspended) {
-        return -1; // -EPERM
+        return -1; 
     }
 
     return 0;
 }
-
-/* --- Signal Gate --- */
 
 SEC("lsm/task_kill")
 int BPF_PROG(shield_task_kill, struct task_struct *p, struct kernel_siginfo *info, int sig, const struct cred *cred) {
