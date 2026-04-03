@@ -164,7 +164,9 @@ def evaluate_hybrid_pipeline(df_eval: pd.DataFrame, models: dict, feature_scaler
     print(f"FN: {cm[1][0]:<6} TP: {cm[1][1]}")
 
 def build_hybrid_engine():
-    dataset_path = r"C:\Users\gokul D\CapstoneML\CapstoneML\ransmap_features_v2.parquet"
+    # Use relative path to dataset
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dataset_path = os.path.join(BASE_DIR, "ransmap_features_v2.parquet")
     df = load_and_preprocess(dataset_path)
 
     df_benign_train = df[(df['split'] == 'original') & (df['label'] == 0)]
@@ -202,8 +204,9 @@ def build_hybrid_engine():
         }
     }
     
-    joblib.dump(artifact, "shield_hybrid_engine.pkl")
-    print("\n[+] Exported deployment artifact: shield_hybrid_engine.pkl")
+    export_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shield_hybrid_engine.pkl")
+    joblib.dump(artifact, export_path)
+    print(f"\n[+] Exported deployment artifact: {export_path}")
 
 if __name__ == "__main__":
     build_hybrid_engine()
