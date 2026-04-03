@@ -25,6 +25,8 @@ const DEFAULT_SETTINGS: AppState['settings'] = {
   whitelist: [
     // Core system
     'systemd', 'systemd-journal', 'systemd-journald', 'systemd-udevd',
+    'systemd-network', 'systemd-networkd', 'systemd-timesyn', 'systemd-timesyncd',
+    'systemd-resolve', 'systemd-resolved', 'systemd-logind',
     'journal-offline', 'dbus-daemon', 'sshd', 'cron', 'atd',
     // Monitoring & virtualization
     'tailscaled', 'vmtoolsd', 'vmware-vmx',
@@ -151,7 +153,12 @@ export const useAppStore = create<AppStore>((set, get) => {
           
           if (data.type === 'window_update') {
             set((state) => {
-              if (state.settings.whitelist.some(w => data.comm.includes(w))) return state;
+              // v8.0 Universal trust: prefix match + static whitelist
+              const isTrusted = (name: string) =>
+                name.startsWith('systemd-') ||
+                state.settings.whitelist.some(w => name.includes(w));
+
+              if (isTrusted(data.comm)) return state;
 
               const existingProcIdx = state.processes.findIndex(p => p.pid === data.pid);
               let updatedProcesses = [...state.processes];

@@ -75,23 +75,40 @@ public:
         return std::regex_match(comm, k_regex);
     }
 
-    // v7.5 Deep Trust — processes silenced BEFORE feature engine
-    // Covers: system infrastructure, dev tooling, and known high-entropy benign processes
-    bool IsDeepTrusted(const char* comm) {
-        static const std::unordered_set<std::string> deep_trust = {
-            // Core system
-            "systemd", "systemd-journal", "systemd-journald", "systemd-udevd",
-            "journal-offline", "dbus-daemon", "sshd", "cron", "atd",
-            // Monitoring & virtualization
+    // v8.0 Universal Trust Engine — no more static lists for system daemons
+    //
+    // Layer 1: Prefix match — any 'systemd-*' process is auto-trusted forever
+    // Layer 2: PPID check — any process spawned by PID 1 (systemd) is a system daemon
+    // Layer 3: Static list — for dev tools and non-systemd trusted processes
+    bool IsDeepTrusted(const char* comm, uint32_t pid = 0) {
+        std::string s(comm);
+
+        // Layer 1: Prefix pattern — catches ALL systemd-* variants universally
+        if (s.compare(0, 8, "systemd-") == 0) return true;
+
+        // Layer 2: PPID == 1 means spawned directly by systemd at boot
+        if (pid > 0) {
+            std::string status_path = "/proc/" + std::to_string(pid) + "/status";
+            std::ifstream f(status_path);
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.compare(0, 5, "PPid:") == 0) {
+                    int ppid = std::stoi(line.substr(5));
+                    if (ppid <= 2) return true; // systemd or kthreadd-spawned
+                    break;
+                }
+            }
+        }
+
+        // Layer 3: Static list for non-systemd trusted processes
+        static const std::unordered_set<std::string> trusted = {
+            "systemd", "journal-offline", "dbus-daemon", "sshd", "cron", "atd",
             "tailscaled", "vmtoolsd", "vmware-vmx", "VGAuthService",
-            // Dev environment (high-entropy I/O but trusted)
             "node", "npm", "npx", "vite",
-            // Shell & scripting (spawned by user, not threat)
             "bash", "sh", "zsh", "dash",
-            // Package management
             "apt", "apt-get", "dpkg",
         };
-        return deep_trust.count(std::string(comm)) > 0;
+        return trusted.count(s) > 0;
     }
 
     void ReadProcessMetrics(uint32_t pid, double &cpu, double &rss) {
@@ -146,11 +163,11 @@ public:
                 raw_v.push_back((float)fv.features[i]);
             }
             
-            // v7.2 Deep Trust Integration
+            // v8.0 Universal Trust Engine — prefix + PPID check
             int final_level = 0;
             float instant_score = 0.0f;
             
-            if (IsDeepTrusted(fv.comm)) {
+            if (IsDeepTrusted(fv.comm, fv.pid)) {
                 final_level = 0;
                 instant_score = 0.00f;
             } else {
