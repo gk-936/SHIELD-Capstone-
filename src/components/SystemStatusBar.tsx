@@ -1,9 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppStore } from '../store/appStore';
-import { Shield } from 'lucide-react';
+import { Shield, Trash2 } from 'lucide-react';
 
 export const SystemStatusBar: React.FC = () => {
-  const { processes, alerts, systemHealth, settings } = useAppStore();  
+  const { processes, alerts, systemHealth, settings, clearSessionData } = useAppStore();
+  const [clearing, setClearing] = useState(false);
+
+  const handleClear = () => {
+    setClearing(true);
+    clearSessionData();
+    setTimeout(() => setClearing(false), 800);
+  };
 
   const activeMediumHighAlerts = alerts.filter(a => a.peakScore >= settings.thresholds.suspicious).length;
 
@@ -87,6 +94,20 @@ export const SystemStatusBar: React.FC = () => {
           </span>
         </div>
       </div>
+
+      {/* Clear Session Button */}
+      <button
+        onClick={handleClear}
+        title="Clear stale session data (processes & alerts)"
+        className={`ml-auto flex items-center gap-2 px-3 py-1.5 rounded border text-[10px] font-bold uppercase tracking-widest transition-all duration-300 ${
+          clearing
+            ? 'border-neon-cyan/60 text-neon-cyan bg-neon-cyan/10 scale-95'
+            : 'border-white/10 text-slate-500 hover:border-red-500/40 hover:text-red-400 hover:bg-red-500/5'
+        }`}
+      >
+        <Trash2 size={11} />
+        {clearing ? 'Cleared' : 'Clear Session'}
+      </button>
     </div>
   );
 };

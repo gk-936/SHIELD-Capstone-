@@ -16,6 +16,7 @@ interface AppStore extends AppState {
   lastAlertedPids: Map<number, number>; // pid -> timestamp
   connectWebSocket: () => void;
   triggerRollback: (pid: number) => void;
+  clearSessionData: () => void;
   updateSettings: (settings: Partial<AppState['settings']>) => void;
 }
 
@@ -104,6 +105,15 @@ export const useAppStore = create<AppStore>((set, get) => {
         }
     },
 
+    clearSessionData: () => {
+      set({
+        processes: [],
+        alerts: [],
+        lastAlertedPids: new Map(),
+      });
+      console.log('[🛡️] Session data cleared.');
+    },
+
     updateSettings: (newSettings) => {
       set((state) => {
         const updatedSettings = { ...state.settings, ...newSettings };
@@ -131,14 +141,8 @@ export const useAppStore = create<AppStore>((set, get) => {
       set({ socket: ws });
 
       ws.onopen = () => {
-        // Clear stale state from any previous daemon session
-        set({
-          processes: [],
-          alerts: [],
-          lastAlertedPids: new Map(),
-          connectionStatus: { connected: true, lastHeartbeat: Date.now() }
-        });
-        console.log("[🛡️] Connected to Telemetry Bridge. State reset.");
+        set({ connectionStatus: { connected: true, lastHeartbeat: Date.now() } });
+        console.log("[🛡️] Connected to Telemetry Bridge.");
       };
 
       ws.onmessage = (event) => {
