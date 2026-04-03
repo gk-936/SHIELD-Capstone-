@@ -289,6 +289,10 @@ void SetBpfSensorMaps(int suspend_fd, int throttle_fd) {
     g_consumer.SetBpfMaps(suspend_fd, throttle_fd);
 }
 
+std::string GetSystemStatusJSON(uint64_t interval_ms) {
+    return g_consumer.GetStatusJSON(interval_ms);
+}
+
 } // namespace shield
 
 extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel) {
