@@ -131,8 +131,14 @@ export const useAppStore = create<AppStore>((set, get) => {
       set({ socket: ws });
 
       ws.onopen = () => {
-        set({ connectionStatus: { connected: true, lastHeartbeat: Date.now() } });
-        console.log("[🛡️] Connected to Telemetry Bridge.");
+        // Clear stale state from any previous daemon session
+        set({
+          processes: [],
+          alerts: [],
+          lastAlertedPids: new Map(),
+          connectionStatus: { connected: true, lastHeartbeat: Date.now() }
+        });
+        console.log("[🛡️] Connected to Telemetry Bridge. State reset.");
       };
 
       ws.onmessage = (event) => {
