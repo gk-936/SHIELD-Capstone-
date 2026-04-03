@@ -263,8 +263,8 @@ export const AlertHistoryPage: React.FC = () => {
       </div>
 
       {/* Alerts Table */}
-      <div className="flex-1 overflow-auto p-4">
-        <div className="glass rounded-lg overflow-hidden h-full flex flex-col">
+      <div className="flex-1 overflow-auto p-4 min-h-0">
+        <div className="glass rounded-lg flex flex-col">
           {filteredAlerts.length > 0 ? (
             <table className="w-full text-sm">
               <thead className="bg-dark-800 sticky top-0 border-b border-dark-600 border-opacity-40">
