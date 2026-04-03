@@ -155,16 +155,16 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Whitelist / Exclusions */}
+          {/* Known-Process Registry / LSM Throttling */}
           <div className="md:col-span-2 bg-white/[0.02] backdrop-blur-xl rounded-3xl border border-white/5 p-7 space-y-6 shadow-2xl">
             <div className="flex items-center gap-3">
-              <Monitor className="text-gray-400" size={20} />
-              <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-gray-200">Process Exclusion List (Hardened)</h2>
+              <Monitor className="text-neon-cyan" size={20} />
+              <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-gray-200">Known-Process Registry (LSM Throttling)</h2>
             </div>
             
             <p className="text-xs text-gray-500 max-w-2xl">
-              Processes in this list will be ignored by the behavioral engine. Use this for trusted backup agents, 
-              legitimate heavy I/O tools, or system maintenance workers to reduce False Positives.
+              Processes in this registry operate under a **Zero Trust** model. S.H.I.E.L.D. will continue to score their behavior, 
+              but will override termination (SIGKILL) with kernel-level **I/O Throttling** to preserve system stability while neutralizing threat velocity.
             </p>
 
             <div className="flex gap-3">

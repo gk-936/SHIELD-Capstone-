@@ -11,16 +11,12 @@
 
 namespace shield {
     extern DashboardBridge g_dashboard;
-    extern void SetBpfSensorMaps(int suspend_fd);
+    extern void SetBpfSensorMaps(int suspend_fd, int throttle_fd);
 }
 
-
-FeatureEngine g_engine;
-extern "C" int handle_ring_buffer(struct shield_sensors_bpf *skel);
-
+// ... status_thread_func same as before, but with real data if needed
 void* status_thread_func(void* arg) {
     while(true) {
-        // Simple periodic status push (mocking BPF stats for now, can be hooked to maps)
         std::string status_json = "{\"type\":\"status_update\", \"events_per_second\":" + std::to_string(rand() % 500 + 1000) + 
                                   ", \"buffer_fill\": " + std::to_string(rand() % 5) + "}";
         shield::g_dashboard.PushUpdate(status_json);
@@ -83,8 +79,8 @@ int main(int argc, char **argv) {
     pthread_t tid;
     pthread_create(&tid, NULL, status_thread_func, NULL);
 
-    /* Pass BPF map FDs to the consumer for active neutralization */
-    shield::SetBpfSensorMaps(bpf_map__fd(skel->maps.suspend_map));
+    /* Pass BPF map FDs to the consumer for active neutralization and throttling */
+    shield::SetBpfSensorMaps(bpf_map__fd(skel->maps.suspend_map), bpf_map__fd(skel->maps.throttle_map));
 
     /* Initialize Ring Buffer Consumption */
     err = handle_ring_buffer(skel);

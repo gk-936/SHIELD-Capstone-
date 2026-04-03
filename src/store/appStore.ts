@@ -76,11 +76,23 @@ export const useAppStore = create<AppStore>((set, get) => {
     updateProcesses: (processes) => set({ processes }),
     updateAlerts: (alerts) => set({ alerts }),
     updateConnectionStatus: (status) => set({ connectionStatus: status }),
-    updateSettings: (newSettings) => set((state) => {
-      const updatedSettings = { ...state.settings, ...newSettings };
-      localStorage.setItem('shield_settings', JSON.stringify(updatedSettings));
-      return { settings: updatedSettings };
-    }),
+    updateSettings: (newSettings) => {
+      set((state) => {
+        const updatedSettings = { ...state.settings, ...newSettings };
+        localStorage.setItem('shield_settings', JSON.stringify(updatedSettings));
+        
+        // Sync registry to backend if whitelist changed
+        if (newSettings.whitelist && ws && ws.readyState === WebSocket.OPEN) {
+          console.log("[🛡️] Syncing Known-Process Registry to kernel...");
+          ws.send(JSON.stringify({
+            type: 'registry_update',
+            list: updatedSettings.whitelist
+          }));
+        }
+        
+        return { settings: updatedSettings };
+      });
+    },
 
     connectWebSocket: () => {
       if (ws) return;

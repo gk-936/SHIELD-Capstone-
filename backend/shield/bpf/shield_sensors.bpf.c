@@ -80,8 +80,24 @@ int BPF_PROG(shield_file_permission, struct file *file, int mask) {
     unsigned int pid = bpf_get_current_pid_tgid() >> 32;
 
     struct throttle_cfg *cfg = bpf_map_lookup_elem(&throttle_map, &pid);
-    if (cfg && (mask & 2)) {
-        // Log suspension logic
+    if (cfg && (mask & 2)) { // Write permission check (MAY_WRITE = 2)
+        unsigned long long now = bpf_ktime_get_ns();
+        unsigned long long window_size = 100000000; // 100ms window
+
+        if (now - cfg->current_window_start > window_size) {
+            cfg->current_window_start = now;
+            cfg->bytes_in_current_window = 0;
+        }
+
+        // Check if budget for this 100ms window is exceeded (rate_limit_bps / 10)
+        unsigned long long budget = cfg->rate_limit_bps / 10;
+        if (cfg->bytes_in_current_window > budget) {
+            return -1; // -EPERM / -EACCES: Force slowdown through error retries
+        }
+
+        // Accumulate (Assumed 4KB average for block level, but we can't easily get write size here precisely)
+        // We accumulate a fixed chunk to throttle operation count
+        cfg->bytes_in_current_window += 4096; 
     }
 
     unsigned int *suspended = bpf_map_lookup_elem(&suspend_map, &pid);
