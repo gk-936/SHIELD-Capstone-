@@ -1,4 +1,4 @@
-﻿import React, { useMemo } from 'react';
+import React, { useMemo } from 'react';
 import type { ProcessInfo } from '../types';
 import { useAppStore } from '../store/appStore';
 
@@ -23,9 +23,10 @@ export const GlobalEntropyHeatmap: React.FC = () => {
   const { processes, setCurrentPage, setSelectedProcessPid } = useAppStore();   
 
   const heatmapCells = useMemo(() => {
-    // We want to fill exactly a 6-column grid. Let's show up to 36 top processes by entropy.
-    const sorted = [...processes].sort((a, b) => b.meanEntropy - a.meanEntropy).slice(0, 36);
-    // Pad with nulls up to exactly a multiple of 6, or exactly 36.
+    // Filter out zero entropy (inactive slots) for the active view, but keep at least 36 slots
+    const active = processes.filter(p => p.meanEntropy > 0);
+    const sorted = [...active].sort((a, b) => b.meanEntropy - a.meanEntropy).slice(0, 36);
+    
     const padded = [...sorted];
     while (padded.length < 36) {
       padded.push(undefined as unknown as ProcessInfo);

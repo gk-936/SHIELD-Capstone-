@@ -149,7 +149,8 @@ export const useAppStore = create<AppStore>((set, get) => {
                   features: data.features,
                   radarScores: data.radar,
                   readCount: data.features ? data.features[18] : updatedProcesses[existingProcIdx].readCount,
-                  writeCount: data.features ? data.features[20] : updatedProcesses[existingProcIdx].writeCount
+                  writeCount: data.features ? data.features[20] : updatedProcesses[existingProcIdx].writeCount,
+                  meanEntropy: data.features ? data.features[3] : updatedProcesses[existingProcIdx].meanEntropy,
                 };
               } else {
                 updatedProcesses.push(newProc);
@@ -177,11 +178,11 @@ export const useAppStore = create<AppStore>((set, get) => {
                 pid: data.pid,
                 processName: data.comm,
                 peakLevel: data.level === 'HIGH' ? 'HIGH' : 'MEDIUM',
-                peakScore: data.level === 'HIGH' ? 0.88 : 0.45,
+                peakScore: data.score || (data.level === 'HIGH' ? 0.88 : 0.45),
                 duration: 500,
                 outcome: 'Active',
                 reportAvailable: true,
-                latestScores: [0.1, 0.2, data.level === 'HIGH' ? 0.8 : 0.4]
+                latestScores: data.radar || [0.1, 0.2, data.level === 'HIGH' ? 0.8 : 0.4]
               };
 
               const newReport: IncidentReport = {

@@ -37,7 +37,6 @@ public:
         scaler_ = std::make_unique<FeatureScaler>();
         council_ = std::make_unique<InferenceCouncil>();
         
-        // Default Known-Process Registry
         known_registry_ = {"node", "npm", "apt", "dpkg", "apt-get", "systemd", "tailscaled"};
         
         g_dashboard.SetMessageCallback([this](const std::string& msg) {
@@ -55,10 +54,16 @@ public:
         return std::regex_match(comm, k_regex);
     }
 
+    // v7.2 Deep Trust for infrastructure tools to avoid False Positives
+    bool IsDeepTrusted(const char* comm) {
+        static const std::unordered_set<std::string> deep_trust = {
+            "systemd", "tailscaled", "vmtoolsd", "journal-offline", "dbus-daemon", "sshd"
+        };
+        return deep_trust.count(std::string(comm)) > 0;
+    }
+
     void ReadProcessMetrics(uint32_t pid, double &cpu, double &rss) {
         cpu = 0.0; rss = 0.0;
-        
-        // 1. Read RSS from /proc/[pid]/status
         std::string status_path = "/proc/" + std::to_string(pid) + "/status";
         std::ifstream status_file(status_path);
         if (status_file.is_open()) {
@@ -68,30 +73,15 @@ public:
                     std::stringstream ss(line.substr(6));
                     uint64_t kb;
                     ss >> kb;
-                    rss = kb / 1024.0; // MB
+                    rss = kb / 1024.0;
                     break;
                 }
             }
-        }
-
-        // 2. Read CPU from /proc/[pid]/stat (Simplified snapshot)
-        std::string stat_path = "/proc/" + std::to_string(pid) + "/stat";
-        std::ifstream stat_file(stat_path);
-        if (stat_file.is_open()) {
-            std::string tmp;
-            for(int i=0; i<13; ++i) stat_file >> tmp; // Skip to utime
-            uint64_t utime, stime;
-            stat_file >> utime >> stime;
-            cpu = (double)(utime + stime) / sysconf(_SC_CLK_TCK); 
-            // Note: This is total CPU time, not instantaneous percentage. 
-            // In a full implementation, we'd compare against previous snapshots.
         }
     }
 
     void OnDashboardMessage(const std::string& msg) {
         if (msg.find("\"type\":\"registry_update\"") != std::string::npos) {
-            std::cout << "[🛡️] Dashboard updated Known-Process Registry." << std::endl;
-            
             std::unordered_set<std::string> new_registry;
             size_t list_start = msg.find("[");
             size_t list_end = msg.find("]");
@@ -105,7 +95,6 @@ public:
                     if (!item.empty()) new_registry.insert(item);
                 }
                 known_registry_ = new_registry;
-                std::cout << "[🛡️] Registry synchronized: " << known_registry_.size() << " processes trusted." << std::endl;
             }
         }
     }
@@ -113,7 +102,6 @@ public:
     void OnEvent(const void* event_ptr) {
         const struct event_t* e = static_cast<const struct event_t*>(event_ptr);
         
-        // Immediate Kernel Filter (No scoring for kernel threads)
         if (IsKernelComm(e->comm)) return;
         
         engine_->push_event(*e);
@@ -125,8 +113,17 @@ public:
                 raw_v.push_back((float)fv.features[i]);
             }
             
-            int final_level = council_->Predict(raw_v); 
-            float instant_score = council_->GetLastScore();
+            // v7.2 Deep Trust Integration
+            int final_level = 0;
+            float instant_score = 0.0f;
+            
+            if (IsDeepTrusted(fv.comm)) {
+                final_level = 0;
+                instant_score = 0.00f;
+            } else {
+                final_level = council_->Predict(raw_v); 
+                instant_score = council_->GetLastScore();
+            }
             
             auto& history = threat_scores_[fv.pid];
             history.push_back(instant_score);
@@ -138,6 +135,8 @@ public:
                 rank_score += (*it) * weight;
                 weight *= 0.85f;
             }
+            // Clamp rank_score to 1.0 for valid visualization
+            rank_score = std::min(1.0f, rank_score);
 
             double cpu = 0.0, rss = 0.0;
             ReadProcessMetrics(fv.pid, cpu, rss);
@@ -162,13 +161,20 @@ public:
                 }
             }
 
-            std::vector<float> radar = council_->GetLastRadarScores();
+            std::vector<float> radar = (instant_score == 0.0f) ? std::vector<float>(6, 0.0f) : council_->GetLastRadarScores();
             std::stringstream radar_ss;
             radar_ss << "[";
             for(size_t i=0; i<radar.size(); ++i) {
                 radar_ss << std::fixed << std::setprecision(2) << radar[i] << (i == radar.size()-1 ? "" : ",");
             }
             radar_ss << "]";
+
+            std::stringstream features_ss;
+            features_ss << "[";
+            for(int i = 0; i < (int)FeatureVector::FEATURE_COUNT; ++i) {
+                features_ss << std::fixed << std::setprecision(4) << fv.features[i] << (i == (int)FeatureVector::FEATURE_COUNT-1 ? "" : ",");
+            }
+            features_ss << "]";
 
             std::stringstream ss;
             ss << std::fixed << std::setprecision(2);
@@ -182,19 +188,20 @@ public:
                << ", \"top_feature\":\"" << top_feature << "\""
                << ", \"top_value\":" << max_val 
                << ", \"radar\":" << radar_ss.str()
+               << ", \"features\":" << features_ss.str()
                << "}";
             
             g_dashboard.PushUpdate(ss.str());
 
             if (final_level > 0) {
-                HandleThreat(fv.pid, final_level, fv.comm, cpu, rss, top_feature);
+                HandleThreat(fv.pid, final_level, fv.comm, cpu, rss, top_feature, rank_score, radar_ss.str());
             }
         }
         engine_->prune_inactive_pids();
     }
 
 private:
-    void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature) {
+    void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature, float score, std::string radar_json) {
         if (pid < 1000) return; 
 
         bool is_known = known_registry_.count(std::string(comm)) > 0;
@@ -202,7 +209,6 @@ private:
 
         if (level == 2) {
             if (is_known) {
-                std::cout << "[🛡️] Known-Process Match (" << comm << "). Initiating BPF Throttling..." << std::endl;
                 if (throttle_map_fd_ != -1) {
                     struct throttle_cfg cfg = { .rate_limit_bps = 512 * 1024, .current_window_start = 0, .bytes_in_current_window = 0 };
                     bpf_map_update_elem(throttle_map_fd_, &pid, &cfg, BPF_ANY);
@@ -210,7 +216,6 @@ private:
                     level = 1; 
                 }
             } else {
-                std::cout << "[🛡️] RANSOMWARE ALERT (PID " << pid << ", " << comm << "). Neutralizing..." << std::endl;
                 kill(pid, SIGKILL);
                 if (suspend_map_fd_ != -1) {
                     unsigned int val = 1;
@@ -226,7 +231,9 @@ private:
         ss << "{\"type\":\"alert_update\", \"pid\":" << pid 
            << ", \"comm\":\"" << comm 
            << "\", \"level\":\"" << (level == 2 ? "HIGH" : "MEDIUM") 
-           << "\", \"outcome\":\"" << outcome
+           << "\", \"score\":" << score
+           << ", \"radar\":" << radar_json
+           << ", \"outcome\":\"" << outcome
            << "\", \"cpu\":" << cpu
            << ", \"mem\":" << rss
            << ", \"top_feature\":\"" << top_feature << "\""

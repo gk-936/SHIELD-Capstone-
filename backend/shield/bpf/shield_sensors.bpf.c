@@ -27,10 +27,21 @@ struct {
     __type(value, unsigned int);
 } suspend_map SEC(".maps");
 
+/* Self-Filtering Map (v7.2) - To avoid monitoring the monitoring tool itself */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 16);
+    __type(key, unsigned int);
+    __type(value, unsigned int);
+} self_pid_map SEC(".maps");
+
 /* Helper to log event to ringbuffer */
 static __always_inline void log_event(unsigned int pid, unsigned int ppid, unsigned long long addr, unsigned int size, unsigned int entropy, enum op_type type) {
-    struct event_t *e;
+    // 1. SELF-FILTERING CHECK
+    unsigned int *is_self = bpf_map_lookup_elem(&self_pid_map, &pid);
+    if (is_self) return;
 
+    struct event_t *e;
     e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) return;
 
@@ -46,18 +57,15 @@ static __always_inline void log_event(unsigned int pid, unsigned int ppid, unsig
     bpf_ringbuf_submit(e, 0);
 }
 
-/* --- Syscall Sensors (Hardened v7.1) --- */
+/* --- Syscall Sensors (Hardened v7.1/v7.2) --- */
 
 SEC("tp/syscalls/sys_enter_write")
 int handle_write_enter(struct trace_event_raw_sys_enter *ctx) {
     unsigned int pid = bpf_get_current_pid_tgid() >> 32;
     unsigned int size = (unsigned int)BPF_CORE_READ(ctx, args[2]);
 
-    // 1KB Filter: Ignore noise, only see heavy I/O
     if (size < 1024) return 0;
 
-    // Use a high-entropy signal (880) for sizable writes.
-    // In a future update, we can sample the buffer ctx->args[1] for real entropy calculation.
     log_event(pid, 0, 0, size, 880, SHIELD_OP_WRITE); 
     return 0;
 }
@@ -87,11 +95,15 @@ int handle_unlink_enter(void *ctx) {
     return 0;
 }
 
-/* --- LSM Throttling (Enforcement) --- */
+/* --- Enforcement Layer --- */
 
 SEC("lsm/file_permission")
 int BPF_PROG(shield_file_permission, struct file *file, int mask) {
     unsigned int pid = bpf_get_current_pid_tgid() >> 32;
+
+    // NEVER THROTTLE SELF
+    unsigned int *is_self = bpf_map_lookup_elem(&self_pid_map, &pid);
+    if (is_self) return 0;
 
     struct throttle_cfg *cfg = bpf_map_lookup_elem(&throttle_map, &pid);
     if (cfg && (mask & 2)) {

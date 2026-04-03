@@ -67,10 +67,10 @@ int InferenceCouncil::Predict(const std::vector<float>& features) {
         last_radar_scores_.clear();
         for(int i=0; i<6; i++) last_radar_scores_.push_back((float)radar[i]);
         
-        // Update last_score_ for UI consistency
+        // Update last_score_ for UI consistency and clamp to [0, 1]
         float sum = 0;
         for(float r : last_radar_scores_) sum += r;
-        last_score_ = sum / 6.0f; 
+        last_score_ = std::min(1.0f, sum / 6.0f); 
 
         return decision;
     }

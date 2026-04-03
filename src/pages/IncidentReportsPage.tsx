@@ -135,10 +135,10 @@ export const IncidentReportsPage: React.FC = () => {
   });
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-dark-900">
+    <div className="flex-1 flex overflow-y-auto bg-dark-900">
       {/* Reports List */}
       <div className={`${selectedReport ? 'w-1/2' : 'w-full'} flex flex-col border-r border-dark-700 border-opacity-40 transition-all`}>
-        <div className="flex-1 overflow-auto p-4">
+        <div className="flex-1 p-4 min-h-0">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-neon-cyan mb-4">
             Incident Reports
           </h2>

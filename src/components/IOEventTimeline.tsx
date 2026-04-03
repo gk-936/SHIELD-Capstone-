@@ -126,8 +126,8 @@ export const IOEventTimeline: React.FC<IOEventTimelineProps> = ({ pid }) => {
   }
 
   return (
-    <div className="glass rounded-lg p-4 h-full flex flex-col">
-      <div className="flex items-center gap-2 mb-4">
+    <div className="glass rounded-lg p-4 h-full max-h-[500px] flex flex-col overflow-hidden">
+      <div className="flex items-center gap-2 mb-4 shrink-0">
         <HardDrive size={16} className="text-neon-cyan" />
         <h3 className="text-sm font-semibold uppercase tracking-wide text-neon-cyan">
           I/O Event Timeline (Last 1000 Events)
