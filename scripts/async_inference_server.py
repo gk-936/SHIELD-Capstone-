@@ -84,7 +84,8 @@ class InferenceEngine:
         # 2. Flash Ransomware Catch (ransomtest.py)
         # If it engages in heavy Read-Write cycles (>20% reads), saturates volume, and the AI correctly identifies
         # anomalous scatter behavior (xgb_prob > 0.25), instantly override its attempts to hide via .bak files.
-        elif feature_vector[19] > 0.20 and feature_vector[17] > 1024 and xgb_prob > 0.25:
+        # NOTE: feature[17] is log1p(total_bytes), so 11.5 ≈ log1p(100KB raw bytes)
+        elif feature_vector[19] > 0.20 and feature_vector[17] > 11.5 and xgb_prob > 0.25:
             final_score = 1.0
         
         # v8.2 — Dynamic Production Hardening
