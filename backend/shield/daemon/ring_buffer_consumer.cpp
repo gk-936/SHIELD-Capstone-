@@ -57,7 +57,6 @@ public:
     }
 
     void SetBpfMaps(int suspend_map_fd, int throttle_map_fd) {
-        suspend_map_fd_ = suspend_map_fd;
         throttle_map_fd_ = throttle_map_fd;
     }
 
