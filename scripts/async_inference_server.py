@@ -24,7 +24,7 @@ class InferenceEngine:
         self.l2 = data['level2_meta']
         self.scaler = data['g_scaler']
         self.features = data['features']
-        self.score_scalers = data.get('score_scalers', {})
+        self.score_scalers = data.get('level1_score_scalers', data.get('score_scalers', {}))
         self.metadata = data.get('metadata', {})
         
         # Meta Indices for v7.0
@@ -81,11 +81,14 @@ class InferenceEngine:
         if feature_vector[19] < 0.05:
             final_score = 0.0
             
-        # 2. Flash Ransomware Catch (ransomtest.py)
-        # If it engages in heavy Read-Write cycles (>20% reads), saturates volume, and the AI correctly identifies
-        # anomalous scatter behavior (xgb_prob > 0.25), instantly override its attempts to hide via .bak files.
-        # NOTE: feature[17] is log1p(total_bytes), so 11.5 ≈ log1p(100KB raw bytes)
-        elif feature_vector[19] > 0.20 and feature_vector[17] > 11.5 and xgb_prob > 0.25:
+        # 2. Flash Ransomware Catch
+        # Ransomware MUST read files AND write encrypted versions back. This creates a distinctive
+        # pattern: balanced read-write ratio + high write volume + AI model agreement.
+        # Conditions are deliberately strict to avoid false positives on build tools (node, gcc)
+        # and other Python scripts (including potentially the inference server itself).
+        # feature[19] = READ_RATIO, feature[21] = WRITE_RATIO, feature[17] = log1p(TOTAL_BYTES)
+        elif (feature_vector[19] > 0.15 and feature_vector[21] > 0.30
+              and feature_vector[17] > 13.0 and xgb_prob > 0.50):
             final_score = 1.0
         
         # v8.2 — Dynamic Production Hardening

@@ -89,7 +89,7 @@ public:
     float GetDampingFactor(const std::string& comm) {
         static const std::unordered_map<std::string, float> damped = {
             {"git", 0.25f}, {"npm", 0.50f}, {"apt", 0.50f}, 
-            {"vite", 0.40f}, 
+            {"vite", 0.40f}, {"node", 0.40f},
             {"gcc", 0.30f}, {"g++", 0.30f}, {"make", 0.30f}, 
             {"docker", 0.45f}, {"containerd", 0.45f}, {"runc", 0.45f},
             {"tar", 0.50f}, {"zip", 0.50f}, {"gzip", 0.50f}, 
