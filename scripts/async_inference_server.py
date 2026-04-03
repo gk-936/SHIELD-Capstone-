@@ -70,19 +70,21 @@ class InferenceEngine:
         council_max = np.max(radar_scores)
         final_score = (0.35 * council_max) + (0.65 * xgb_prob)
         
-        # --- THE SIMPLE SOLUTION (v8.8 Physics Gate) ---
-        # Ransomware fundamentally requires high entropy writes.
-        # feature_vector[4] is HIGH_ENTROPY_RATIO. feature_vector[17] is TOTAL_BYTES.
+        # --- THE SIMPLE SOLUTION (v8.9 True Physics Gate) ---
+        # NOTE: The BPF sensor currently hardcodes entropy (880), so feature 4 is ALWAYS 1.0. We cannot use it.
+        # Instead, we evaluate the absolute physical necessity of Ransomware: It MUST READ files locally to encrypt them.
+        # feature_vector[19] is READ_RATIO. feature_vector[17] is TOTAL_BYTES.
         
-        # 1. False Positive Mitigation (sandbox_prep.py)
-        # If it doesn't write high entropy, it CANNOT be ransomware, regardless of what XGBoost says about write bursts.
-        if feature_vector[4] < 0.05:
+        # 1. False Positive Mitigation (sandbox_prep.py, git clone, npm install)
+        # If a process is purely writing data and mathematically skipping READ cycles, 
+        # it is impossible for it to be ransomware encrypting the local disk!
+        if feature_vector[19] < 0.05:
             final_score = 0.0
             
         # 2. Flash Ransomware Catch (ransomtest.py)
-        # If it's saturating the disk with huge amounts of encrypted data, it IS ransomware.
-        # Even if it wraps it in 1-to-1 .bak files which drags the Machine Learning model down.
-        elif feature_vector[4] >= 0.40 and feature_vector[17] > 1024:
+        # If it engages in heavy Read-Write cycles (>20% reads), saturates volume, and the AI correctly identifies
+        # anomalous scatter behavior (xgb_prob > 0.25), instantly override its attempts to hide via .bak files.
+        elif feature_vector[19] > 0.20 and feature_vector[17] > 1024 and xgb_prob > 0.25:
             final_score = 1.0
         
         # v8.2 — Dynamic Production Hardening

@@ -44,7 +44,7 @@ public:
         engine_ = std::make_unique<FeatureEngine>(60.0, 0.1);
         scaler_ = std::make_unique<FeatureScaler>();
         council_ = std::make_unique<InferenceCouncil>();
-        StartThrottleThread();
+        // Removed legacy StartThrottleThread as per v8.8 Physics Gate update
         
         // v7.5 - Initialize Persistence & Recovery
         ForensicManager::Get().Init("scripts/shield_sandbox", ".shield_vault");
@@ -88,7 +88,8 @@ public:
      */
     float GetDampingFactor(const std::string& comm) {
         static const std::unordered_map<std::string, float> damped = {
-            {"git", 0.25f}, {"vite", 0.40f}, 
+            {"git", 0.25f}, {"npm", 0.50f}, {"apt", 0.50f}, 
+            {"vite", 0.40f}, 
             {"gcc", 0.30f}, {"g++", 0.30f}, {"make", 0.30f}, 
             {"docker", 0.45f}, {"containerd", 0.45f}, {"runc", 0.45f},
             {"tar", 0.50f}, {"zip", 0.50f}, {"gzip", 0.50f}, 
@@ -190,17 +191,8 @@ public:
                 
                 instant_score = raw_score * damping;
 
-                // v8.6 — Physical Userspace Micro-Burst Throttling
-                // If instant confidence is high, clamp process execution speed to 5% instantly
+                // Stage 5 Rollback: Snapshot on extremely suspicious activity early
                 if (instant_score > 0.80f) {
-                    {
-                        std::lock_guard<std::mutex> lock(throttle_mtx_);
-                        throttled_pids_.insert(fv.pid);
-                    }
-                    if (throttle_map_fd_ != -1) {
-                        struct throttle_cfg cfg = { .rate_limit_bps = 10 * 1024, .current_window_start = 0, .bytes_in_current_window = 0 };
-                        bpf_map_update_elem(throttle_map_fd_, &fv.pid, &cfg, BPF_ANY);
-                    }
                     ForensicManager::Get().CreateSnapshot(fv.pid, fv.comm);
                 }
 
@@ -316,12 +308,7 @@ private:
         std::string reported_level = "MEDIUM";
 
         if (requires_kill) {
-            {
-                std::lock_guard<std::mutex> lock(throttle_mtx_);
-                throttled_pids_.erase(pid);
-            }
             kill(pid, SIGKILL);
-            kill(pid, SIGCONT); // Wake up if it was frozen so it can die
             printf("\n[\033[31m\xf0\x9f\x9b\xa1\xef\xb8\x8f\033[0m] \033[1;31mNEUTRALIZED\033[0m: S.H.I.E.L.D Terminal Response Executed (PID: %u, Threat: %.2f)\n", pid, rank_score);
             
             // Un-throttle in eBPF just in case
@@ -330,8 +317,8 @@ private:
             }
             outcome = "Neutralized";
             reported_level = "CRITICAL";
-        } else if (rank_score > 0.74f || level == 2) {
-            // Alert zone: Not yet killed, but aggressively throttled
+        } else if (rank_score > 0.74f || instant_score > 0.74f) {
+            // Alert zone: Not yet killed, but aggressively flagged/BPF throttled
             if (throttle_map_fd_ != -1) {
                 struct throttle_cfg cfg = { .rate_limit_bps = 10 * 1024, .current_window_start = 0, .bytes_in_current_window = 0 };
                 bpf_map_update_elem(throttle_map_fd_, &pid, &cfg, BPF_ANY);
@@ -370,38 +357,10 @@ private:
     std::unordered_set<std::string> known_registry_;
     std::map<uint32_t, std::chrono::steady_clock::time_point> alert_cooldown_;
     int throttle_map_fd_;
+
     std::atomic<uint64_t> total_events_;
     std::atomic<uint64_t> total_inferences_;
     std::atomic<double> last_inference_ms_;
-
-    // Userspace Micro-Burst Throttling (v8.6)
-    std::mutex throttle_mtx_;
-    std::unordered_set<uint32_t> throttled_pids_;
-
-    void StartThrottleThread() {
-        std::thread([this]() {
-            while (true) {
-                std::vector<uint32_t> targets;
-                {
-                    std::lock_guard<std::mutex> lock(throttle_mtx_);
-                    targets.assign(throttled_pids_.begin(), throttled_pids_.end());
-                }
-                
-                if (targets.empty()) {
-                    usleep(50000);
-                    continue;
-                }
-                
-                // 5% execution budget: 5ms run, 95ms freeze
-                for (uint32_t pid : targets) kill(pid, SIGCONT);
-                usleep(5000); 
-                for (uint32_t pid : targets) {
-                    kill(pid, SIGSTOP); // Apply absolute physical userspace throttle
-                }
-                usleep(95000); 
-            }
-        }).detach();
-    }
 };
 
 static RingBufferConsumer g_consumer;
