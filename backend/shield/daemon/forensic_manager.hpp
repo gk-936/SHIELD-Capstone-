@@ -80,6 +80,7 @@ public:
         }).detach();
 
         return true;
+    }
 
     bool ManualSnapshot() {
         if (sandbox_path_.empty() || vault_path_.empty()) {

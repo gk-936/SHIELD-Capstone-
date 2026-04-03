@@ -358,7 +358,9 @@ private:
     std::unique_ptr<FeatureScaler> scaler_;
     std::unique_ptr<InferenceCouncil> council_;
     std::map<uint32_t, std::deque<float>> threat_scores_;
-    std::unordered_set<std::string> known_registry_;    std::unordered_set<uint32_t> killed_pids_;    std::map<uint32_t, std::chrono::steady_clock::time_point> alert_cooldown_;
+    std::unordered_set<std::string> known_registry_;
+    std::unordered_set<uint32_t> killed_pids_;
+    std::map<uint32_t, std::chrono::steady_clock::time_point> alert_cooldown_;
     int throttle_map_fd_;
 
     std::atomic<uint64_t> total_events_;
