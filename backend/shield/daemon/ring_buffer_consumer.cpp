@@ -104,11 +104,10 @@ public:
         // Layer 2: PPID == 1 check (Simplified)
         if (pid > 0 && pid < 1000) return true; // Most early system daemons
 
-        // Layer 3: Identity-based trust for core utilities
+        // Layer 3: Identity-based trust for core utilities ONLY
         static const std::unordered_set<std::string> trusted = {
             "systemd", "journal-offline", "dbus-daemon", "sshd", "cron", "atd",
-            "tailscaled", "vmtoolsd",    // Dev environment (These are now DAMPED in C++, so whitelist here is advisory)
-            "node", "npm", "npx", "vite", "git", "python3", "gcc", "g++", "make", "docker",
+            "tailscaled", "vmtoolsd",
             // Shells
             "bash", "sh", "zsh", "dash",
             // Package management
