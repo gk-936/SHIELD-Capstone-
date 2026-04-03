@@ -64,7 +64,9 @@ public:
 
         // Restore: rm sandbox -> cp vault content
         std::string clean_cmd = "rm -rf " + sandbox_path_ + "/*";
-        system(clean_cmd.c_str());
+        if (system(clean_cmd.c_str()) != 0) {
+            std::cerr << "[🛡️] Warning: Sandbox cleanup returned non-zero. Proceeding with sync." << std::endl;
+        }
 
         std::string restore_cmd = "cp -rp " + backup_dir + "/* " + sandbox_path_ + "/";
         int ret = system(restore_cmd.c_str());
