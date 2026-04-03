@@ -57,6 +57,7 @@ public:
     }
 
     void SetBpfMaps(int suspend_map_fd, int throttle_map_fd) {
+        suspend_map_fd_ = suspend_map_fd;
         throttle_map_fd_ = throttle_map_fd;
     }
 
@@ -88,12 +89,14 @@ public:
      */
     float GetDampingFactor(const std::string& comm) {
         static const std::unordered_map<std::string, float> damped = {
-            {"git", 0.25f}, {"npm", 0.50f}, {"apt", 0.50f}, 
+            {"git", 0.25f}, {"git-remote-http", 0.25f}, {"git-remote-https", 0.25f},
+            {"npm", 0.50f}, {"apt", 0.50f}, 
             {"vite", 0.40f}, {"node", 0.40f},
             {"gcc", 0.30f}, {"g++", 0.30f}, {"make", 0.30f}, 
             {"docker", 0.45f}, {"containerd", 0.45f}, {"runc", 0.45f},
             {"tar", 0.50f}, {"zip", 0.50f}, {"gzip", 0.50f}, 
-            {"rsync", 0.40f}, {"find", 0.60f}
+            {"rsync", 0.40f}, {"find", 0.60f},
+            {"nano", 0.20f}, {"vi", 0.20f}, {"vim", 0.20f}, {"emacs", 0.20f}
         };
         auto it = damped.find(comm);
         return it != damped.end() ? it->second : 1.0f;
@@ -179,6 +182,12 @@ public:
                 final_level = 0;
                 instant_score = 0.00f;
             } else {
+                // Hardware Sync: Suspend process instantly while AI computes
+                uint32_t val = 1;
+                if (suspend_map_fd_ >= 0) {
+                    bpf_map_update_elem(suspend_map_fd_, &fv.pid, &val, BPF_ANY);
+                }
+
                 auto start_time = std::chrono::high_resolution_clock::now();
                 final_level = council_->Predict(raw_v); 
                 float raw_score = council_->GetLastScore();
@@ -280,6 +289,11 @@ public:
             if (final_level > 0 || rank_score > 0.74f || instant_score > 0.80f) {
                 HandleThreat(fv.pid, final_level, fv.comm, cpu, rss, top_feature, rank_score, instant_score, fv.features[FeatureVector::HIGH_ENTROPY_RATIO], history.size(), radar_ss.str());
             }
+
+            // Hardware Sync: Resume process ONLY IF NOT KILLED
+            if (suspend_map_fd_ >= 0 && !killed_pids_.count(fv.pid)) {
+                bpf_map_delete_elem(suspend_map_fd_, &fv.pid);
+            }
         }
         engine_->prune_inactive_pids();
     }
@@ -362,6 +376,7 @@ private:
     std::unordered_set<uint32_t> killed_pids_;
     std::map<uint32_t, std::chrono::steady_clock::time_point> alert_cooldown_;
     int throttle_map_fd_;
+    int suspend_map_fd_ = -1;
 
     std::atomic<uint64_t> total_events_;
     std::atomic<uint64_t> total_inferences_;

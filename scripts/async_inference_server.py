@@ -70,17 +70,11 @@ class InferenceEngine:
         council_max = np.max(radar_scores)
         final_score = (0.35 * council_max) + (0.65 * xgb_prob)
         
-        # --- v9.0 Physics Gate: False Positive Mitigation ONLY ---
-        # We trust the AI model's hybrid fusion score for detection.
-        # The physics gate ONLY overrides DOWNWARD to protect known-safe patterns.
-        # It NEVER overrides UPWARD (no final_score = 1.0) — that caused false positives.
-        #
-        # feature_vector[19] = READ_RATIO
-        # Ransomware MUST read files to encrypt them. A write-only process (read_ratio ≈ 0)
-        # is physically incapable of being ransomware.
-        if feature_vector[19] < 0.05:
-            final_score = 0.0
-        
+        # v9.0 Physics Gate Removed
+        # With the 30-event flash-window trigger, we cannot guarantee that 
+        # a micro-window contains a balanced read/write ratio. A window might 
+        # naturally contain 30 consecutive buffered writes. The AI model already
+        # handles this correctly; hardcoding a downward override blinds the system.
         # v8.2 — Dynamic Production Hardening
         p_threshold = self.metadata.get('production_threshold', 0.65) # Fallback to 0.65 if missing
         m_threshold = p_threshold * 0.6 # Medium is 60% of High
