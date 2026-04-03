@@ -79,11 +79,11 @@ public:
         std::vector<FeatureVector> ready_windows = engine_->get_ready_windows();
         for (const auto& fv : ready_windows) {
             std::vector<float> raw_v;
-            for(int i = 0; i < (int)fv.features.size(); ++i) {
+            for(int i = 0; i < (int)FeatureVector::FEATURE_COUNT; ++i) {
                 raw_v.push_back((float)fv.features[i]);
             }
             
-            int level = council_->Predict(raw_v);
+            council_->Predict(raw_v); // Instantaneous prediction results are updated in council state
             float real_score = council_->GetLastScore();
             
             auto& history = threat_scores_[fv.pid];

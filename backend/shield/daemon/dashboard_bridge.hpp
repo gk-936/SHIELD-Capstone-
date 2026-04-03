@@ -22,7 +22,7 @@ namespace shield {
 
 class DashboardBridge {
 public:
-    DashboardBridge(int port = 8080) : port_(port), running_(false), server_fd_(-1) {}
+    DashboardBridge(int port = 8080) : port_(port), server_fd_(-1), running_(false) {}
     ~DashboardBridge() { Stop(); }
 
     void Start() {
