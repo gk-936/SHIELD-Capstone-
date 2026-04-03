@@ -16,10 +16,11 @@ def prep_sandbox():
         filename = f"document_{i:03d}.txt"
         filepath = os.path.join(SANDBOX_DIR, filename)
         
-        # Create a benign text file
-        content = "".join(random.choices(string.ascii_letters + " ", k=FILE_SIZE_KB * 1024))
+        # Create a benign text file in small chunks to avoid OOM on low-memory systems
         with open(filepath, "w") as f:
-            f.write(content)
+            for _ in range(FILE_SIZE_KB):
+                chunk = "".join(random.choices(string.ascii_letters + " ", k=1024))
+                f.write(chunk)
     
     print(f"✅ Created {FILE_COUNT} files in sandbox.")
 
