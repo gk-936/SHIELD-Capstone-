@@ -85,8 +85,7 @@ public:
      */
     float GetDampingFactor(const std::string& comm) {
         static const std::unordered_map<std::string, float> damped = {
-            {"git", 0.25f}, {"node", 0.35f}, {"npm", 0.35f}, {"npx", 0.35f}, 
-            {"vite", 0.40f}, {"python", 0.50f}, {"python3", 0.50f},
+            {"git", 0.25f}, {"vite", 0.40f}, 
             {"gcc", 0.30f}, {"g++", 0.30f}, {"make", 0.30f}, 
             {"docker", 0.45f}, {"containerd", 0.45f}, {"runc", 0.45f},
             {"tar", 0.50f}, {"zip", 0.50f}, {"gzip", 0.50f}, 
@@ -179,11 +178,25 @@ public:
             } else {
                 auto start_time = std::chrono::high_resolution_clock::now();
                 final_level = council_->Predict(raw_v); 
-                instant_score = council_->GetLastScore();
+                float raw_score = council_->GetLastScore();
                 
-                // v8.3 — Behavioral Damping logic
+                // v8.4 — Secure Damping & Critical Overrides
                 float damping = GetDampingFactor(fv.comm);
-                instant_score *= damping;
+                
+                // CRITICAL OVERRIDE: If AI confidence is extreme (>0.95), bypass damping factor
+                if (raw_score > 0.95f) damping = 1.0f; 
+                
+                instant_score = raw_score * damping;
+
+                // v8.5 — Inertial Throttling (Temporal Freeze)
+                // If instant confidence is high, freeze IO instantly to stop sub-second attacks, but DO NOT kill yet
+                if (instant_score > 0.80f) {
+                    if (throttle_map_fd_ != -1) {
+                        struct throttle_cfg cfg = { .rate_limit_bps = 10 * 1024, .current_window_start = 0, .bytes_in_current_window = 0 };
+                        bpf_map_update_elem(throttle_map_fd_, &fv.pid, &cfg, BPF_ANY);
+                    }
+                    ForensicManager::Get().CreateSnapshot(fv.pid, fv.comm);
+                }
 
                 auto end_time = std::chrono::high_resolution_clock::now();
                 
@@ -266,54 +279,57 @@ public:
             
             g_dashboard.PushUpdate(ss.str());
 
-            if (final_level > 0) {
-                HandleThreat(fv.pid, final_level, fv.comm, cpu, rss, top_feature, rank_score, radar_ss.str());
+            // v8.5 — Handle Threats based on Rank Score and Python Level
+            if (final_level > 0 || rank_score > 0.74f) {
+                HandleThreat(fv.pid, final_level, fv.comm, cpu, rss, top_feature, rank_score, history.size(), radar_ss.str());
             }
         }
         engine_->prune_inactive_pids();
     }
 
 private:
-    void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature, float score, std::string radar_json) {
+    void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature, float rank_score, size_t history_size, std::string radar_json) {
         if (pid < 1000) return;
 
-        // Alert Cooldown: 30 seconds per PID to prevent alert storm
+        // v8.5: If the damped rank_score hits >0.85 over 6 windows, it's a persistent, confirmed threat.
+        bool requires_kill = (rank_score > 0.85f && history_size >= 6);
+
+        // Alert Cooldown: 30 seconds per PID for observations, but bypass cooldown for an actual KILL
         auto now = std::chrono::steady_clock::now();
         auto cit = alert_cooldown_.find(pid);
-        if (cit != alert_cooldown_.end()) {
+        if (cit != alert_cooldown_.end() && !requires_kill) {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cit->second).count();
             if (elapsed < 30) return;
         }
-        alert_cooldown_[pid] = now;
+        alert_cooldown_[pid] = requires_kill ? (now + std::chrono::hours(1)) : now; // Prevent post-kill spam
 
-        bool is_known = known_registry_.count(std::string(comm)) > 0;
-        std::string outcome = "Neutralized";
+        std::string outcome = "Monitoring";
+        std::string reported_level = "MEDIUM";
 
-        if (level == 2) {
-            if (is_known) {
-                if (throttle_map_fd_ != -1) {
-                    struct throttle_cfg cfg = { .rate_limit_bps = 512 * 1024, .current_window_start = 0, .bytes_in_current_window = 0 };
-                    bpf_map_update_elem(throttle_map_fd_, &pid, &cfg, BPF_ANY);
-                    outcome = "Throttled";
-                    level = 1; 
-                }
-            } else {
-                kill(pid, SIGKILL);
-                if (suspend_map_fd_ != -1) {
-                    unsigned int val = 1;
-                    bpf_map_update_elem(suspend_map_fd_, &pid, &val, BPF_ANY);
-                }
+        if (requires_kill) {
+            kill(pid, SIGKILL);
+            if (suspend_map_fd_ != -1) {
+                unsigned int val = 1;
+                bpf_map_update_elem(suspend_map_fd_, &pid, &val, BPF_ANY);
             }
-        } else if (level == 1) {
-            outcome = "Monitoring";
+            outcome = "Neutralized";
+            reported_level = "CRITICAL";
+        } else if (rank_score > 0.74f || level == 2) {
+            // Alert zone: Not yet killed, but aggressively throttled
+            if (throttle_map_fd_ != -1) {
+                struct throttle_cfg cfg = { .rate_limit_bps = 10 * 1024, .current_window_start = 0, .bytes_in_current_window = 0 };
+                bpf_map_update_elem(throttle_map_fd_, &pid, &cfg, BPF_ANY);
+            }
+            outcome = "Throttled (Investigating)";
+            reported_level = "HIGH";
         }
 
         std::stringstream ss;
         ss << std::fixed << std::setprecision(2);
         ss << "{\"type\":\"alert_update\", \"pid\":" << pid 
            << ", \"comm\":\"" << comm 
-           << "\", \"level\":\"" << (level == 2 ? "HIGH" : "MEDIUM") 
-           << "\", \"score\":" << score
+           << "\", \"level\":\"" << reported_level 
+           << "\", \"score\":" << rank_score
            << ", \"radar\":" << radar_json
            << ", \"outcome\":\"" << outcome
            << "\", \"cpu\":" << cpu
