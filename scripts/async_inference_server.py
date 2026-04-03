@@ -62,13 +62,8 @@ class InferenceEngine:
         radar_scores = np.array(radar_list)
 
         # 3. Meta-Learner (XGBoost)
-        # Meta features: 6 raw model probes + 3 raw scaled behavioral features
-        meta_input = np.column_stack([
-            np.array(list(raw_scores.values())).reshape(1, -1),
-            X_s[:, self.meta_feat_indices]
-        ])
-        
-        xgb_prob = self.l2.predict_proba(meta_input)[:, 1][0]
+        # Using the full 26-feature vector to match the training logic in train_council.py
+        xgb_prob = self.l2.predict_proba(X_s)[:, 1][0]
         
         # 4. Final Hybrid Fusion
         council_max = np.max(radar_scores)
