@@ -23,6 +23,9 @@ public:
     /* Cleanup inactive PIDs (300s timeout as per doc) */
     void prune_inactive_pids();
 
+    /* Get count of active monitored PIDs */
+    size_t get_active_pid_count();
+
 private:
     struct InternalEvent {
         uint64_t timestamp_ns;

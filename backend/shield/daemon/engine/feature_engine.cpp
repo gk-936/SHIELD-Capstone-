@@ -64,14 +64,17 @@ void FeatureEngine::prune_inactive_pids() {
     auto it = pid_map_.begin();
     while (it != pid_map_.end()) {
         /* Prune after 300s of inactivity as per design doc */
-        // Note: Using latest event in map as 'now' or system clock
-        // For simulation, we'll keep them unless they are truly old.
         if (it->second.events.size() > 1) {
              uint64_t age_ns = it->second.events.back().timestamp_ns - it->second.events.front().timestamp_ns;
-             if (age_ns > (uint64_t)600e9) { // Prune if buffer exceeds 10 mins for safety
+             if (age_ns > (uint64_t)600e9) { 
                  it->second.events.pop_front();
              }
         }
         it++;
     }
+}
+
+size_t FeatureEngine::get_active_pid_count() {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    return pid_map_.size();
 }

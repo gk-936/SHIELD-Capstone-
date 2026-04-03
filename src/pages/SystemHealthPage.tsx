@@ -13,15 +13,27 @@ import {
 } from 'lucide-react';
 
 export const SystemHealthPage: React.FC = () => {
-  const { systemHealth, tamperLog, scalerRecalibration } = useAppStore();
+  const { systemHealth, tamperLog, scalerRecalibration, systemHealthHistory } = useAppStore();
 
-  // Generate time-series data for charts
   const eventsPerSecondData = useMemo(() => {
-    return Array.from({ length: 60 }, (_, i) => ({
-      time: `${i}m`,
-      value: systemHealth.eventsPerSecond + Math.sin(i / 10) * 500,
+    if (systemHealthHistory.length === 0) {
+      return Array.from({ length: 30 }, (_, i) => ({ time: `${i}s`, value: 0 }));
+    }
+    return systemHealthHistory.map(h => ({
+      time: h.time,
+      value: h.eps
     }));
-  }, [systemHealth.eventsPerSecond]);
+  }, [systemHealthHistory]);
+
+  const latencyHistoryData = useMemo(() => {
+    if (systemHealthHistory.length === 0) {
+      return Array.from({ length: 30 }, (_, i) => ({ time: `${i}s`, value: 0 }));
+    }
+    return systemHealthHistory.map(h => ({
+      time: h.time,
+      value: h.latency
+    }));
+  }, [systemHealthHistory]);
 
   return (
     <div className="flex-1 flex flex-col overflow-auto bg-dark-900">
@@ -186,6 +198,30 @@ export const SystemHealthPage: React.FC = () => {
                 <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Model Status</p>
                 <StatusIndicator status="success" label="Operational" />
               </div>
+            </div>
+          </div>
+
+          {/* Latency History Chart */}
+          <div className="glass rounded-lg p-4 mb-4">
+            <h3 className="text-sm font-semibold text-neon-cyan mb-4">Mean Inference Latency Trend (ms)</h3>
+            <div style={{ height: '200px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={latencyHistoryData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a2332" />
+                  <XAxis
+                    dataKey="time"
+                    stroke="#6b7280"
+                    fontSize={11}
+                    tick={{ fill: '#9ca3af' }}
+                    interval={10}
+                  />
+                  <YAxis stroke="#6b7280" fontSize={11} tick={{ fill: '#9ca3af' }} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f1628', border: '1px solid #1a2332' }}
+                  />
+                  <Line type="monotone" dataKey="value" stroke="#ffd700" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
 

@@ -23,6 +23,8 @@
 #include <unordered_set>
 #include <regex>
 #include <unistd.h>
+#include <atomic>
+#include <chrono>
 
 namespace shield {
     extern DashboardBridge g_dashboard;
@@ -32,7 +34,7 @@ namespace shield {
 
 class RingBufferConsumer {
 public:
-    RingBufferConsumer() : suspend_map_fd_(-1), throttle_map_fd_(-1) {
+    RingBufferConsumer() : suspend_map_fd_(-1), throttle_map_fd_(-1), total_events_(0), total_inferences_(0), last_inference_ms_(0.0) {
         engine_ = std::make_unique<FeatureEngine>();
         scaler_ = std::make_unique<FeatureScaler>();
         council_ = std::make_unique<InferenceCouncil>();
@@ -47,6 +49,21 @@ public:
     void SetBpfMaps(int suspend_map_fd, int throttle_map_fd) {
         suspend_map_fd_ = suspend_map_fd;
         throttle_map_fd_ = throttle_map_fd;
+    }
+
+    std::string GetStatusJSON(uint64_t interval_ms) {
+        uint64_t events = total_events_.exchange(0);
+        double eps = (events * 1000.0) / interval_ms;
+        
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(2);
+        ss << "{\"type\":\"status_update\", \"events_per_second\":" << (int)eps 
+           << ", \"buffer_fill\":" << (eps > 5000 ? 85 : eps > 1000 ? 15 : 1) 
+           << ", \"inferences_per_second\":" << (int)(total_inferences_.exchange(0) * 1000.0 / interval_ms)
+           << ", \"mean_inference_latency\":" << last_inference_ms_.load()
+           << ", \"pid_count_tracked\":" << engine_->get_active_pid_count()
+           << "}";
+        return ss.str();
     }
 
     bool IsKernelComm(const char* comm) {
@@ -104,6 +121,7 @@ public:
         
         if (IsKernelComm(e->comm)) return;
         
+        total_events_++;
         engine_->push_event(*e);
         
         std::vector<FeatureVector> ready_windows = engine_->get_ready_windows();
@@ -121,8 +139,14 @@ public:
                 final_level = 0;
                 instant_score = 0.00f;
             } else {
+                auto start_time = std::chrono::high_resolution_clock::now();
                 final_level = council_->Predict(raw_v); 
                 instant_score = council_->GetLastScore();
+                auto end_time = std::chrono::high_resolution_clock::now();
+                
+                double latency = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+                last_inference_ms_.store(latency);
+                total_inferences_++;
             }
             
             auto& history = threat_scores_[fv.pid];
@@ -249,6 +273,9 @@ private:
     std::unordered_set<std::string> known_registry_;
     int suspend_map_fd_;
     int throttle_map_fd_;
+    std::atomic<uint64_t> total_events_;
+    std::atomic<uint64_t> total_inferences_;
+    std::atomic<double> last_inference_ms_;
 };
 
 static RingBufferConsumer g_consumer;

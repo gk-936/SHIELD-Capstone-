@@ -14,14 +14,13 @@
 namespace shield {
     extern DashboardBridge g_dashboard;
     extern void SetBpfSensorMaps(int suspend_fd, int throttle_fd);
+    extern std::string GetSystemStatusJSON(uint64_t interval_ms);
 }
 
 // v7.2 - Real-time system monitoring
 void* status_thread_func(void* arg) {
     while(true) {
-        // In a full implementation, we'd read /proc/stat or use libbpf to get map stats
-        // For now, we'll send a "HEALTHY" baseline
-        std::string status_json = "{\"type\":\"status_update\", \"events_per_second\": 1395, \"buffer_fill\": 1}";
+        std::string status_json = shield::GetSystemStatusJSON(5000);
         shield::g_dashboard.PushUpdate(status_json);
         sleep(5);
     }

@@ -11,6 +11,7 @@ interface AppStore extends AppState {
   
   // Real-time integration
   globalRankHistory: { time: string, score: number }[];
+  systemHealthHistory: { time: string, eps: number, latency: number }[];
   connectWebSocket: () => void;
   updateSettings: (settings: Partial<AppState['settings']>) => void;
 }
@@ -61,6 +62,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     tamperLog: [],
     enforcementLog: [],
     globalRankHistory: [], 
+    systemHealthHistory: [],
     scalerRecalibration: {
         lastRecalibration: Date.now(),
         nextScheduled: Date.now() + 3600000,
@@ -238,14 +240,25 @@ export const useAppStore = create<AppStore>((set, get) => {
               };
             });
           } else if (data.type === 'status_update') {
-            set((state) => ({
-              systemHealth: {
-                ...state.systemHealth,
-                eventsPerSecond: data.events_per_second,
-                ringBufferFillPercentage: data.buffer_fill,
-                pidCountTracked: state.processes.length
-              }
-            }));
+            set((state) => {
+              const newHealthPoint = {
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                eps: data.events_per_second,
+                latency: data.mean_inference_latency
+              };
+
+              return {
+                systemHealth: {
+                  ...state.systemHealth,
+                  eventsPerSecond: data.events_per_second,
+                  ringBufferFillPercentage: data.buffer_fill,
+                  inferencesPerSecond: data.inferences_per_second || 0,
+                  meanInferenceLatency: data.mean_inference_latency || 0,
+                  pidCountTracked: data.pid_count_tracked || state.processes.length
+                },
+                systemHealthHistory: [...state.systemHealthHistory, newHealthPoint].slice(-60)
+              };
+            });
           }
         } catch (e) {
           console.error("[🛡️] Malformed packet received.");
