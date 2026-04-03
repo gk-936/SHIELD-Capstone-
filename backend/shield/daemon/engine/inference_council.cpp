@@ -53,25 +53,26 @@ int InferenceCouncil::Predict(const std::vector<float>& features) {
     }
 
     // 2. Receive Decision (1 byte) + Radar Scores (6 doubles = 48 bytes) = 49 bytes
-    uint8_t response[49];
-    int valread = recv(sock, response, 49, 0);
+    char response[64];
+    int valread = read(sock, response, 64);
     close(sock);
-
-    if (valread == 49) {
+    
+    // v8.5 Payload: 1 byte (decision) + 8 bytes (double score) + 48 bytes (6x double radar) = 57 bytes
+    if (valread == 57) {
         int decision = response[0];
+        
+        double final_server_score;
+        memcpy(&final_server_score, response + 1, 8);
+        last_score_ = std::min(1.0f, (float)final_server_score);
         
         // Extract 6 Radar Scores
         double radar[6];
-        memcpy(radar, response + 1, 48);
+        memcpy(radar, response + 9, 48);
         
         last_radar_scores_.clear();
         for(int i=0; i<6; i++) last_radar_scores_.push_back((float)radar[i]);
         
-        // Update last_score_ for UI consistency and clamp to [0, 1]
-        float sum = 0;
-        for(float r : last_radar_scores_) sum += r;
-        last_score_ = std::min(1.0f, sum / 6.0f); 
-
+        // We no longer calculate average, last_score_ is the true XGBoost-fused meta score
         return decision;
     }
 

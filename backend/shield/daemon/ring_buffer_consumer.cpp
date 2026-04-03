@@ -38,7 +38,8 @@ namespace shield {
 class RingBufferConsumer {
 public:
     RingBufferConsumer() : suspend_map_fd_(-1), throttle_map_fd_(-1), total_events_(0), total_inferences_(0), last_inference_ms_(0.0) {
-        engine_ = std::make_unique<FeatureEngine>();
+        // v8.5 Fix: Step interval reduced from 10.0s to 0.1s for true sub-second threat detection
+        engine_ = std::make_unique<FeatureEngine>(60.0, 0.1);
         scaler_ = std::make_unique<FeatureScaler>();
         council_ = std::make_unique<InferenceCouncil>();
         

@@ -78,7 +78,7 @@ class InferenceEngine:
         if final_score >= p_threshold: decision = 2 # HIGH (Hardened)
         elif final_score >= m_threshold: decision = 1 # MEDIUM
         
-        return decision, radar_scores
+        return decision, final_score, radar_scores
 
 async def handle_client(reader, writer):
     global engine
@@ -86,9 +86,10 @@ async def handle_client(reader, writer):
         data = await reader.readexactly(26 * 8)
         feature_vector = struct.unpack('26d', data)
         
-        decision, radar = engine.predict(feature_vector)
+        decision, final_score, radar = engine.predict(feature_vector)
         
-        payload = struct.pack('B', decision) + struct.pack('6d', *radar)
+        # v8.5 Payload: decision (1 byte) + final_score (8 bytes) + radar (48 bytes) = 57 bytes total
+        payload = struct.pack('B', decision) + struct.pack('d', float(final_score)) + struct.pack('6d', *radar)
         writer.write(payload)
         await writer.drain()
     except Exception as e:
