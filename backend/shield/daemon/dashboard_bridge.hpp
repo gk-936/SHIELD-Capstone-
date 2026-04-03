@@ -213,6 +213,12 @@ private:
             send_result(fd, ok, "clear", ok ? "All snapshots cleared" : "Clear failed");
             if (ok) PushUpdate(ForensicManager::Get().GetVaultStatusJSON());
 
+        } else if (msg_type == "vault_set_policy") {
+            bool auto_snap = (message.find("\"autoSnapshot\":true") != std::string::npos);
+            int freq = extract_int("snapshotFrequency");
+            ForensicManager::Get().SetPolicy(auto_snap, freq);
+            send_result(fd, true, "set_policy", "Policy updated");
+
         } else if (msg_type == "vault_set_paths") {
             std::string sandbox = extract_str("sandboxPath");
             std::string vault   = extract_str("vaultPath");

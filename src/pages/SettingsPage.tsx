@@ -17,8 +17,21 @@ const RollbackControlPanel: React.FC = () => {
   const [sandboxPath, setSandboxPath] = useState('scripts/shield_sandbox');
   const [vaultPath, setVaultPath] = useState('.shield_vault');
   const [autoSnapshot, setAutoSnapshot] = useState(true);
+  const [snapshotFrequency, setSnapshotFrequency] = useState(0);
   const [retentionLimit, setRetentionLimit] = useState(10);
   const [opFeedback, setOpFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // v8.1 — Sync policy to daemon on state change
+  useEffect(() => {
+    const { socket } = useAppStore.getState();
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ 
+        type: 'vault_set_policy', 
+        autoSnapshot, 
+        snapshotFrequency 
+      }));
+    }
+  }, [autoSnapshot, snapshotFrequency]);
 
   // Load vault on mount & auto-refresh every 10s
   useEffect(() => {
@@ -259,17 +272,29 @@ const RollbackControlPanel: React.FC = () => {
             <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-gray-200">Snapshot Policy</h3>
           </div>
           <div className="space-y-6">
-            {/* Auto-Snapshot Toggle */}
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-200 font-medium">Auto-Snapshot on Threat</p>
-                <p className="text-[10px] text-gray-500 mt-0.5">Snapshot sandbox when SUSPICIOUS level is triggered</p>
+            {/* Snapshot Frequency Selector */}
+            <div className="space-y-3 pt-2 border-t border-white/5">
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] text-gray-400 uppercase tracking-widest">Capture Frequency</label>
+                <div className="flex items-center gap-2">
+                  <Clock size={12} className="text-neon-cyan" />
+                  <span className="text-xs font-bold text-neon-cyan">
+                    {snapshotFrequency === 0 ? 'On Threat' : `${snapshotFrequency} Min`}
+                  </span>
+                </div>
               </div>
-              <button onClick={() => setAutoSnapshot(v => !v)} className="transition-all">
-                {autoSnapshot
-                  ? <ToggleRight size={32} className="text-neon-cyan" />
-                  : <ToggleLeft size={32} className="text-gray-600" />}
-              </button>
+              <select 
+                value={snapshotFrequency}
+                onChange={(e) => setSnapshotFrequency(parseInt(e.target.value))}
+                className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-gray-200 text-sm outline-none focus:border-neon-cyan/30 transition-all appearance-none cursor-pointer"
+              >
+                <option value={0}>Reactive (On-Threat Only)</option>
+                <option value={1}>Every 1 Minute (Extreme)</option>
+                <option value={5}>Every 5 Minutes (Standard)</option>
+                <option value={15}>Every 15 Minutes (Routine)</option>
+                <option value={60}>Every 60 Minutes (Archive)</option>
+              </select>
+              <p className="text-[10px] text-gray-500 italic">Determines how often a scheduled capture is taken automatically.</p>
             </div>
 
             {/* Retention Policy */}

@@ -50,7 +50,8 @@ const DEFAULT_SETTINGS: AppState['settings'] = {
   remoteIp: '127.0.0.1',
   remotePort: 8080,
   autoConnect: true,
-  historyLimit: 60
+  historyLimit: 60,
+  snapshotFrequency: 0
 };
 
 const initialSystemHealth: SystemHealthMetrics = {

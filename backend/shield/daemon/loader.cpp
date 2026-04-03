@@ -23,6 +23,9 @@ namespace shield {
 // v7.2 - Real-time system monitoring
 void* status_thread_func(void* arg) {
     while(true) {
+        // v8.1 — Process proactive snapshots
+        shield::ForensicManager::Get().Tick();
+        
         std::string status_json = shield::GetSystemStatusJSON(5000);
         shield::g_dashboard.PushUpdate(status_json);
         sleep(5);

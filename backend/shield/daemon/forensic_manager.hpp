@@ -203,8 +203,40 @@ public:
         mkdir(vault_path_.c_str(), 0777);
     }
 
+    // v8.1 — Proactive Snapshot Policy
+    void SetPolicy(bool auto_snap, int frequency_mins) {
+        auto_snapshot_ = auto_snap;
+        frequency_mins_ = frequency_mins;
+        last_proactive_ms_ = CurrentTimeMs(); // Reset timer on policy change
+        std::cout << "[\U0001f6e1\ufe0f] Vault Policy Updated: AutoSnap=" << (auto_snap?"ON":"OFF") 
+                  << " Frequency=" << frequency_mins << "m" << std::endl;
+    }
+
+    void Tick() {
+        if (frequency_mins_ <= 0) return;
+
+        long long now = CurrentTimeMs();
+        if (now - last_proactive_ms_ >= (long long)frequency_mins_ * 60000) {
+            std::string ts = std::to_string(now);
+            std::string key = "scheduled_" + ts;
+            std::string backup_dir = vault_path_ + "/" + key;
+            
+            if (mkdir(backup_dir.c_str(), 0777) == 0) {
+                std::string cmd = "cp -a " + sandbox_path_ + "/. " + backup_dir + "/ 2>/dev/null";
+                if (system(cmd.c_str()) == 0) {
+                    std::ofstream meta(backup_dir + "/.shield_meta");
+                    meta << "{\"pid\":0,\"comm\":\"scheduled\",\"level\":\"MANUAL\",\"timestamp\":" << ts << "}";
+                    std::cout << "[\U0001f6e1\ufe0f] Scheduled Proactive Snapshot: " << key << std::endl;
+                    last_proactive_ms_ = now;
+                } else {
+                    system(("rm -rf " + backup_dir).c_str());
+                }
+            }
+        }
+    }
+
 private:
-    ForensicManager() {}
+    ForensicManager() : auto_snapshot_(true), frequency_mins_(0), last_proactive_ms_(0) {}
 
     bool RestoreFrom(const std::string& backup_dir) {
         std::string clean_cmd = "rm -rf " + sandbox_path_ + "/*";
@@ -273,6 +305,11 @@ private:
     std::string vault_path_;
     std::vector<std::string> history_;
     std::mutex mutex_;
+
+    // v8.1 — Proactive State
+    bool auto_snapshot_;
+    int frequency_mins_;
+    long long last_proactive_ms_;
 };
 
 } // namespace shield

@@ -25,6 +25,7 @@ class InferenceEngine:
         self.scaler = data['g_scaler']
         self.features = data['features']
         self.score_scalers = data.get('score_scalers', {})
+        self.metadata = data.get('metadata', {})
         
         # Meta Indices for v7.0
         try:
@@ -69,9 +70,13 @@ class InferenceEngine:
         council_max = np.max(radar_scores)
         final_score = (0.35 * council_max) + (0.65 * xgb_prob)
         
+        # v8.2 — Dynamic Production Hardening
+        p_threshold = self.metadata.get('production_threshold', 0.65) # Fallback to 0.65 if missing
+        m_threshold = p_threshold * 0.6 # Medium is 60% of High
+        
         decision = 0
-        if final_score >= 0.59: decision = 2 # HIGH
-        elif final_score >= 0.35: decision = 1 # MEDIUM
+        if final_score >= p_threshold: decision = 2 # HIGH (Hardened)
+        elif final_score >= m_threshold: decision = 1 # MEDIUM
         
         return decision, radar_scores
 

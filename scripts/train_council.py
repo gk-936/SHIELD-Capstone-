@@ -5,7 +5,7 @@ import joblib
 import xgboost as xgb
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
 from sklearn.model_selection import GroupShuffleSplit
-from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
+from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix, roc_curve
 from pyod.models.iforest import IForest
 from pyod.models.hbos import HBOS
 from pyod.models.lof import LOF
@@ -133,35 +133,50 @@ def train_xgboost_metalearner(df_train: pd.DataFrame, feature_scalers: dict) -> 
     clf.fit(X_train, y_train)
     return clf
 
-def evaluate_hybrid_pipeline(df_eval: pd.DataFrame, models: dict, feature_scalers: dict, score_scalers: dict, meta_clf: xgb.XGBClassifier, dataset_name: str):
-    """Calculates final hybrid scores and outputs professional metrics."""
+def find_fpr_threshold(y_true: np.ndarray, scores: np.ndarray, target_fpr: float = 0.01) -> float:
+    """Finds the threshold that achieves a target False Positive Rate."""
+    fpr, tpr, thresholds = roc_curve(y_true, scores)
+    idx = np.where(fpr <= target_fpr)[0][-1]
+    return thresholds[idx]
+
+def evaluate_hybrid_pipeline(df_eval: pd.DataFrame, models: dict, feature_scalers: dict, score_scalers: dict, meta_clf: xgb.XGBClassifier, dataset_name: str) -> float:
+    """Calculates final hybrid scores, outputs metrics, and returns the 1% FPR threshold."""
     council_scores = calculate_council_score(df_eval, models, feature_scalers, score_scalers)
     Xg = feature_scalers["full"].transform(df_eval[ALL_MODEL_FEATS].fillna(0).values)
     xgb_probs = meta_clf.predict_proba(Xg)[:, 1]
     
-    hybrid_scores = (0.35 * council_scores) + (0.65 * xgb_probs) # Shift weight slightly towards meta-learner
+    hybrid_scores = (0.35 * council_scores) + (0.65 * xgb_probs)
     y_true = df_eval['label'].astype(int).values
     
-    # Lowered threshold from 0.59 to 0.48 for better recall-precision balance
-    threshold = 0.48
-    y_pred = (hybrid_scores >= threshold).astype(int)
+    # ─── Balanced Threshold (0.48) ───
+    b_threshold = 0.48
+    y_pred_b = (hybrid_scores >= b_threshold).astype(int)
     
-    print(f"\n{'='*50}\nEVALUATION REPORT: {dataset_name.upper()}\n{'='*50}")
+    # ─── Hardened Production Threshold (1% FPR) ───
+    p_threshold = b_threshold
+    if len(np.unique(y_true)) > 1:
+        p_threshold = find_fpr_threshold(y_true, hybrid_scores, target_fpr=0.01)
+    
+    y_pred_p = (hybrid_scores >= p_threshold).astype(int)
+    
+    print(f"\n{'='*60}\nEVALUATION REPORT: {dataset_name.upper()}\n{'='*60}")
     
     if len(np.unique(y_true)) > 1:
-        print(f"ROC AUC Score: {roc_auc_score(y_true, hybrid_scores):.4f}\n")
+        print(f"ROC AUC Score: {roc_auc_score(y_true, hybrid_scores):.4f}")
     else:
-        print(f"ROC AUC Score: nan (Only one class present in y_true)\n")
+        print(f"ROC AUC Score: nan (Only one class present in y_true)")
         
-    print(f"Classification Report (Threshold = {threshold} [BALANCED ALERT]):")
+    print(f"\n[🔬] MODE A: BALANCED ALERT (Threshold = {b_threshold:.2f})")
+    print(classification_report(y_true, y_pred_b, target_names=['Benign', 'Ransomware'], digits=4, zero_division=0))
+    cm_b = confusion_matrix(y_true, y_pred_b, labels=[0, 1])
+    print(f"Confusion Matrix (Balanced): TN: {cm_b[0][0]}, FP: {cm_b[0][1]}, FN: {cm_b[1][0]}, TP: {cm_b[1][1]}")
+
+    print(f"\n[🛡️] MODE B: PRODUCTION HARDENED (Threshold = {p_threshold:.4f} @ 1% FPR target)")
+    print(classification_report(y_true, y_pred_p, target_names=['Benign', 'Ransomware'], digits=4, zero_division=0))
+    cm_p = confusion_matrix(y_true, y_pred_p, labels=[0, 1])
+    print(f"Confusion Matrix (Hardened): TN: {cm_p[0][0]}, FP: {cm_p[0][1]}, FN: {cm_p[1][0]}, TP: {cm_p[1][1]}")
     
-    # Use zero_division parameter to handle cases with only one class
-    print(classification_report(y_true, y_pred, target_names=['Benign', 'Ransomware'], digits=4, zero_division=0))
-    
-    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-    print("Confusion Matrix:")
-    print(f"TN: {cm[0][0]:<6} FP: {cm[0][1]}")
-    print(f"FN: {cm[1][0]:<6} TP: {cm[1][1]}")
+    return p_threshold
 
 def build_hybrid_engine():
     # Use relative path to dataset
@@ -186,7 +201,7 @@ def build_hybrid_engine():
     
     meta_clf = train_xgboost_metalearner(df_meta_train, feature_scalers)
 
-    evaluate_hybrid_pipeline(df_robust, models, feature_scalers, score_scalers, meta_clf, "Robustness Validation (Out-of-Distribution & Variants)")
+    p_threshold = evaluate_hybrid_pipeline(df_robust, models, feature_scalers, score_scalers, meta_clf, "Robustness Validation (Out-of-Distribution & Variants)")
     evaluate_hybrid_pipeline(df_mix, models, feature_scalers, score_scalers, meta_clf, "Mix Split (Simultaneous Execution)")
 
     artifact = {
@@ -198,9 +213,10 @@ def build_hybrid_engine():
         "g_scaler": feature_scalers["full"],
         "features": ALL_MODEL_FEATS,
         "metadata": {
-            "version": "7.0-production-shield", 
+            "version": "7.2-hardened-shield", 
             "architecture": "hybrid_stack",
-            "weights": COUNCIL_WEIGHTS
+            "weights": COUNCIL_WEIGHTS,
+            "production_threshold": p_threshold
         }
     }
     

@@ -181,6 +181,7 @@ export interface Settings {
   remotePort: number;
   autoConnect: boolean;
   historyLimit: number;
+  snapshotFrequency: number; // 0 = reactive, others = mins
 }
 
 // Sliding window rank observation
