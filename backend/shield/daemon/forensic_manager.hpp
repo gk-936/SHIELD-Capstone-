@@ -10,8 +10,11 @@
 #include <iomanip>
 #include <chrono>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <algorithm>
+#include <ctime>
 
 namespace shield {
 
@@ -24,11 +27,12 @@ public:
 
     void Init(const std::string& sandbox_path, const std::string& vault_path) {
         sandbox_path_ = sandbox_path;
-        vault_path_ = vault_path;
+        vault_path_   = vault_path;
         mkdir(vault_path_.c_str(), 0777);
         LoadHistory();
     }
 
+    // ─── Alert History ───────────────────────────────────────────────────────
     void LogAlert(const std::string& alert_json) {
         std::lock_guard<std::mutex> lock(mutex_);
         history_.push_back(alert_json);
@@ -41,46 +45,203 @@ public:
         return history_;
     }
 
-    bool CreateSnapshot(uint32_t pid, const std::string& comm) {
-        std::string backup_dir = vault_path_ + "/backup_" + std::to_string(pid);
+    // ─── Snapshot ─────────────────────────────────────────────────────────────
+    bool CreateSnapshot(uint32_t pid, const std::string& comm, const std::string& level = "MEDIUM") {
+        std::string key = "backup_" + std::to_string(pid);
+        std::string backup_dir = vault_path_ + "/" + key;
         mkdir(backup_dir.c_str(), 0777);
 
-        // Simple directory copy (v7.5)
         std::string cmd = "cp -rp " + sandbox_path_ + "/* " + backup_dir + "/ 2>/dev/null";
         int ret = system(cmd.c_str());
-        
+
         if (ret == 0) {
-            std::cout << "[🛡️] Secure Snapshot Vaulted for PID " << pid << " (" << comm << ")" << std::endl;
+            // Write metadata file
+            std::ofstream meta(backup_dir + "/.shield_meta");
+            meta << "{\"pid\":" << pid
+                 << ",\"comm\":\"" << comm << "\""
+                 << ",\"level\":\"" << level << "\""
+                 << ",\"timestamp\":" << CurrentTimeMs()
+                 << "}";
+            std::cout << "[\U0001f6e1\ufe0f] Secure Snapshot: " << key << " ("  << comm << ")" << std::endl;
             return true;
         }
         return false;
     }
 
-    bool Rollback(uint32_t pid) {
-        std::string backup_dir = vault_path_ + "/backup_" + std::to_string(pid);
-        
-        struct stat info;
-        if (stat(backup_dir.c_str(), &info) != 0) return false;
+    bool ManualSnapshot() {
+        std::string ts = std::to_string(CurrentTimeMs());
+        std::string key = "manual_" + ts;
+        std::string backup_dir = vault_path_ + "/" + key;
+        mkdir(backup_dir.c_str(), 0777);
 
-        // Restore: rm sandbox -> cp vault content
-        std::string clean_cmd = "rm -rf " + sandbox_path_ + "/*";
-        if (system(clean_cmd.c_str()) != 0) {
-            std::cerr << "[🛡️] Warning: Sandbox cleanup returned non-zero. Proceeding with sync." << std::endl;
-        }
-
-        std::string restore_cmd = "cp -rp " + backup_dir + "/* " + sandbox_path_ + "/";
-        int ret = system(restore_cmd.c_str());
+        std::string cmd = "cp -rp " + sandbox_path_ + "/* " + backup_dir + "/ 2>/dev/null";
+        int ret = system(cmd.c_str());
 
         if (ret == 0) {
-            std::cout << "[🛡️] ROLLBACK SUCCESSFUL for PID context " << pid << ". Data Integrity Restored." << std::endl;
+            std::ofstream meta(backup_dir + "/.shield_meta");
+            meta << "{\"pid\":0,\"comm\":\"manual\",\"level\":\"MANUAL\",\"timestamp\":" << ts << "}";
             return true;
         }
         return false;
+    }
+
+    // ─── Rollback ────────────────────────────────────────────────────────────
+    bool Rollback(uint32_t pid) {
+        std::string backup_dir = vault_path_ + "/backup_" + std::to_string(pid);
+        struct stat info;
+        if (stat(backup_dir.c_str(), &info) != 0) return false;
+        return RestoreFrom(backup_dir);
+    }
+
+    bool RollbackByKey(const std::string& key) {
+        std::string backup_dir = vault_path_ + "/" + key;
+        struct stat info;
+        if (stat(backup_dir.c_str(), &info) != 0) return false;
+        return RestoreFrom(backup_dir);
+    }
+
+    // ─── Delete ───────────────────────────────────────────────────────────────
+    bool DeleteSnapshot(const std::string& key) {
+        // Safety: only allow keys matching known patterns
+        if (key.find("..") != std::string::npos) return false;
+        std::string cmd = "rm -rf " + vault_path_ + "/" + key;
+        return system(cmd.c_str()) == 0;
+    }
+
+    bool ClearAllSnapshots() {
+        std::string cmd = "rm -rf " + vault_path_ + "/backup_* " + vault_path_ + "/manual_*";
+        return system(cmd.c_str()) == 0;
+    }
+
+    // ─── Vault Status JSON ────────────────────────────────────────────────────
+    std::string GetVaultStatusJSON() {
+        std::vector<std::string> snapshots;
+        long long totalSize = 0;
+        long long lastTime = 0;
+        std::vector<std::pair<long long, std::string>> recentFiles;
+
+        DIR* dir = opendir(vault_path_.c_str());
+        if (dir) {
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != nullptr) {
+                std::string name(entry->d_name);
+                if (name == "." || name == "..") continue;
+                if (name.compare(0, 7, "backup_") != 0 && name.compare(0, 7, "manual_") != 0) continue;
+
+                std::string snap_dir = vault_path_ + "/" + name;
+                long long snap_size = DirSize(snap_dir);
+                totalSize += snap_size;
+
+                // Read metadata
+                std::string meta_path = snap_dir + "/.shield_meta";
+                std::ifstream mf(meta_path);
+                std::string meta_content((std::istreambuf_iterator<char>(mf)), {});
+
+                long long ts = ExtractLong(meta_content, "\"timestamp\":");
+                if (ts > lastTime) lastTime = ts;
+
+                // Collect recent files
+                CollectRecentFiles(snap_dir, recentFiles);
+
+                std::string entry_json = "{\"key\":\"" + name + "\""
+                    + ",\"sizeBytes\":" + std::to_string(snap_size)
+                    + "," + (meta_content.empty() ? "\"pid\":0,\"comm\":\"unknown\",\"level\":\"MEDIUM\",\"timestamp\":0" : meta_content.substr(1, meta_content.size()-2))
+                    + "}";
+                snapshots.push_back(entry_json);
+            }
+            closedir(dir);
+        }
+
+        // Sort recent files by timestamp, take top 5
+        std::sort(recentFiles.begin(), recentFiles.end(), [](auto& a, auto& b){ return a.first > b.first; });
+        
+        std::string files_json = "[";
+        for (int i = 0; i < (int)std::min((size_t)5, recentFiles.size()); i++) {
+            if (i > 0) files_json += ",";
+            files_json += "\"" + recentFiles[i].second + "\"";
+        }
+        files_json += "]";
+
+        std::string snaps_json = "[";
+        for (size_t i = 0; i < snapshots.size(); i++) {
+            if (i > 0) snaps_json += ",";
+            snaps_json += snapshots[i];
+        }
+        snaps_json += "]";
+
+        std::ostringstream out;
+        out << "{\"type\":\"vault_status\""
+            << ",\"sandboxPath\":\"" << sandbox_path_ << "\""
+            << ",\"vaultPath\":\"" << vault_path_ << "\""
+            << ",\"totalSnapshots\":" << snapshots.size()
+            << ",\"totalSizeBytes\":" << totalSize
+            << ",\"lastSnapshotTime\":" << lastTime
+            << ",\"snapshots\":" << snaps_json
+            << ",\"recentFiles\":" << files_json
+            << "}";
+        return out.str();
+    }
+
+    // Called when paths are updated from dashboard
+    void SetPaths(const std::string& sandbox, const std::string& vault) {
+        sandbox_path_ = sandbox;
+        vault_path_ = vault;
+        mkdir(vault_path_.c_str(), 0777);
     }
 
 private:
     ForensicManager() {}
-    
+
+    bool RestoreFrom(const std::string& backup_dir) {
+        std::string clean_cmd = "rm -rf " + sandbox_path_ + "/*";
+        if (system(clean_cmd.c_str()) != 0) {
+            std::cerr << "[\U0001f6e1\ufe0f] Warning: Sandbox cleanup returned non-zero." << std::endl;
+        }
+        std::string restore_cmd = "cp -rp " + backup_dir + "/* " + sandbox_path_ + "/ 2>/dev/null";
+        int ret = system(restore_cmd.c_str());
+        if (ret == 0) {
+            std::cout << "[\U0001f6e1\ufe0f] ROLLBACK SUCCESSFUL from: " << backup_dir << std::endl;
+            return true;
+        }
+        return false;
+    }
+
+    long long DirSize(const std::string& path) {
+        std::string cmd = "du -sb " + path + " 2>/dev/null | cut -f1";
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) return 0;
+        long long size = 0;
+        fscanf(pipe, "%lld", &size);
+        pclose(pipe);
+        return size;
+    }
+
+    void CollectRecentFiles(const std::string& dir_path, std::vector<std::pair<long long, std::string>>& out) {
+        DIR* d = opendir(dir_path.c_str());
+        if (!d) return;
+        struct dirent* e;
+        while ((e = readdir(d)) != nullptr) {
+            if (e->d_name[0] == '.') continue; // skip hidden/meta
+            std::string full = dir_path + "/" + e->d_name;
+            struct stat st;
+            if (stat(full.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+                out.push_back({ (long long)st.st_mtime * 1000, std::string(e->d_name) });
+            }
+        }
+        closedir(d);
+    }
+
+    long long ExtractLong(const std::string& json, const std::string& key) {
+        size_t pos = json.find(key);
+        if (pos == std::string::npos) return 0;
+        return std::stoll(json.substr(pos + key.size()));
+    }
+
+    long long CurrentTimeMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
     void LoadHistory() {
         std::ifstream f(".shield_forensics.json");
         std::string line;

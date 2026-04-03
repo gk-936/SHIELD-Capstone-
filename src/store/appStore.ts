@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { AppState, ProcessInfo, Alert, ConnectionStatus, SystemHealthMetrics, IncidentReport, EnforcementAction } from '../types';
+import type { VaultStatus, VaultOpResult } from '../types/vault';
 
 interface AppStore extends AppState {
   // State update methods
@@ -13,10 +14,19 @@ interface AppStore extends AppState {
   globalRankHistory: { time: string, score: number }[];
   systemHealthHistory: { time: string, eps: number, latency: number }[];
   socket: WebSocket | null;
-  lastAlertedPids: Map<number, number>; // pid -> timestamp
+  lastAlertedPids: Map<number, number>;
+  // Vault
+  vaultStatus: VaultStatus | null;
+  lastVaultOp: VaultOpResult | null;
   connectWebSocket: () => void;
   triggerRollback: (pid: number) => void;
   clearSessionData: () => void;
+  queryVault: () => void;
+  restoreSnapshot: (key: string) => void;
+  deleteSnapshot: (key: string) => void;
+  snapshotNow: () => void;
+  clearVault: () => void;
+  setVaultPaths: (sandbox: string, vault: string) => void;
   updateSettings: (settings: Partial<AppState['settings']>) => void;
 }
 
@@ -83,6 +93,8 @@ export const useAppStore = create<AppStore>((set, get) => {
     systemHealthHistory: [],
     socket: null,
     lastAlertedPids: new Map<number, number>(),
+    vaultStatus: null,
+    lastVaultOp: null,
     scalerRecalibration: {
         lastRecalibration: Date.now(),
         nextScheduled: Date.now() + 3600000,
@@ -114,6 +126,37 @@ export const useAppStore = create<AppStore>((set, get) => {
         lastAlertedPids: new Map(),
       });
       console.log('[🛡️] Session data cleared.');
+    },
+
+    queryVault: () => {
+      const { socket } = get();
+      if (socket?.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ type: 'vault_query' }));
+    },
+    restoreSnapshot: (key: string) => {
+      const { socket } = get();
+      if (socket?.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ type: 'vault_restore', key }));
+    },
+    deleteSnapshot: (key: string) => {
+      const { socket } = get();
+      if (socket?.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ type: 'vault_delete', key }));
+    },
+    snapshotNow: () => {
+      const { socket } = get();
+      if (socket?.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ type: 'vault_snapshot' }));
+    },
+    clearVault: () => {
+      const { socket } = get();
+      if (socket?.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ type: 'vault_clear' }));
+    },
+    setVaultPaths: (sandbox: string, vault: string) => {
+      const { socket } = get();
+      if (socket?.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ type: 'vault_set_paths', sandboxPath: sandbox, vaultPath: vault }));
     },
 
     updateSettings: (newSettings) => {
@@ -344,6 +387,12 @@ export const useAppStore = create<AppStore>((set, get) => {
                 systemHealthHistory: [...state.systemHealthHistory, newHealthPoint].slice(-60)
               };
             });
+          } else if (data.type === 'vault_status') {
+            set({ vaultStatus: data as VaultStatus });
+          } else if (data.type === 'vault_op_result') {
+            set({ lastVaultOp: data as VaultOpResult });
+            // Auto-refresh vault after any mutation
+            if (data.success) get().queryVault();
           }
         } catch (e) {
           console.error("[🛡️] Malformed packet received.");

@@ -164,13 +164,68 @@ private:
 
         std::string message((char*)payload.data(), payload_len);
         
-        // v7.5 - Handle Internal Rollback Commands
-        if (message.find("\"type\":\"rollback_request\"") != std::string::npos) {
-            size_t pid_pos = message.find("\"pid\":");
-            if (pid_pos != std::string::npos) {
-                uint32_t pid = std::stoi(message.substr(pid_pos + 6));
-                ForensicManager::Get().Rollback(pid);
+        // v8.0 — Vault Command Router
+        auto extract_str = [&](const std::string& key) -> std::string {
+            size_t pos = message.find("\"" + key + "\":\"");
+            if (pos == std::string::npos) return "";
+            size_t start = pos + key.size() + 4;
+            size_t end = message.find("\"", start);
+            return (end != std::string::npos) ? message.substr(start, end - start) : "";
+        };
+        auto extract_int = [&](const std::string& key) -> uint32_t {
+            size_t pos = message.find("\"" + key + "\":");
+            if (pos == std::string::npos) return 0;
+            return (uint32_t)std::stoul(message.substr(pos + key.size() + 3));
+        };
+        auto send_result = [&](int sock, bool ok, const std::string& op, const std::string& msg) {
+            std::string json = "{\"type\":\"vault_op_result\",\"success\":" + std::string(ok ? "true" : "false")
+                             + ",\"operation\":\"" + op + "\",\"message\":\"" + msg + "\"}";
+            auto frame = CreateWebSocketFrame(json);
+            send(sock, frame.data(), frame.size(), MSG_NOSIGNAL);
+        };
+
+        std::string msg_type = extract_str("type");
+
+        if (msg_type == "vault_query") {
+            std::string status = ForensicManager::Get().GetVaultStatusJSON();
+            auto frame = CreateWebSocketFrame(status);
+            send(fd, frame.data(), frame.size(), MSG_NOSIGNAL);
+
+        } else if (msg_type == "vault_restore") {
+            std::string key = extract_str("key");
+            bool ok = !key.empty() && ForensicManager::Get().RollbackByKey(key);
+            send_result(fd, ok, "restore", ok ? "Restore successful" : "Restore failed: key not found");
+
+        } else if (msg_type == "vault_delete") {
+            std::string key = extract_str("key");
+            bool ok = !key.empty() && ForensicManager::Get().DeleteSnapshot(key);
+            send_result(fd, ok, "delete", ok ? "Snapshot deleted" : "Delete failed");
+            // Refresh vault status for all clients
+            if (ok) PushUpdate(ForensicManager::Get().GetVaultStatusJSON());
+
+        } else if (msg_type == "vault_snapshot") {
+            bool ok = ForensicManager::Get().ManualSnapshot();
+            send_result(fd, ok, "snapshot", ok ? "Manual snapshot created" : "Snapshot failed");
+            if (ok) PushUpdate(ForensicManager::Get().GetVaultStatusJSON());
+
+        } else if (msg_type == "vault_clear") {
+            bool ok = ForensicManager::Get().ClearAllSnapshots();
+            send_result(fd, ok, "clear", ok ? "All snapshots cleared" : "Clear failed");
+            if (ok) PushUpdate(ForensicManager::Get().GetVaultStatusJSON());
+
+        } else if (msg_type == "vault_set_paths") {
+            std::string sandbox = extract_str("sandboxPath");
+            std::string vault   = extract_str("vaultPath");
+            if (!sandbox.empty() && !vault.empty()) {
+                ForensicManager::Get().SetPaths(sandbox, vault);
+                send_result(fd, true, "set_paths", "Paths updated");
             }
+
+        } else if (msg_type == "rollback_request") {
+            // Legacy: rollback by PID
+            uint32_t pid = extract_int("pid");
+            bool ok = pid > 0 && ForensicManager::Get().Rollback(pid);
+            send_result(fd, ok, "restore", ok ? "Rollback successful" : "No snapshot found for PID");
         }
         
         if (message_callback_) {
