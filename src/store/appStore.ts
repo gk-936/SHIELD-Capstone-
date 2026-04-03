@@ -17,7 +17,7 @@ interface AppStore extends AppState {
 
 const DEFAULT_SETTINGS: AppState['settings'] = {
   thresholds: { suspicious: 0.5, critical: 0.8 },
-  whitelist: ['systemd', 'dbus-daemon', 'tailscaled', 'kworker', 'node', 'vite'],
+  whitelist: ['systemd', 'tailscaled', 'vmtoolsd', 'journal-offline', 'dbus-daemon', 'sshd', 'systemd-journal', 'systemd-journald'],
   remoteIp: '127.0.0.1',
   remotePort: 8080,
   autoConnect: true,
@@ -158,15 +158,14 @@ export const useAppStore = create<AppStore>((set, get) => {
               }
 
               // Update Global Rank History for the live chart
-              const sorted = updatedProcesses.sort((a, b) => b.rankScore - a.rankScore);
-              const topScore = sorted.length > 0 ? sorted[0].rankScore : 0;
+              const topScore = updatedProcesses.length > 0 ? Math.max(...updatedProcesses.map(p => p.rankScore)) : 0;
               const newHistoryPoint = {
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
                 score: topScore
               };
-
+              
               return { 
-                  processes: sorted.slice(0, 50),
+                  processes: updatedProcesses.sort((a, b) => b.rankScore - a.rankScore).slice(0, 50),
                   globalRankHistory: [...state.globalRankHistory, newHistoryPoint].slice(-state.settings.historyLimit),
                   connectionStatus: { connected: true, lastHeartbeat: Date.now() }
               };

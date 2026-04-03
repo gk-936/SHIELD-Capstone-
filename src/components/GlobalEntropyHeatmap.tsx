@@ -23,9 +23,9 @@ export const GlobalEntropyHeatmap: React.FC = () => {
   const { processes, setCurrentPage, setSelectedProcessPid } = useAppStore();   
 
   const heatmapCells = useMemo(() => {
-    // Filter out zero entropy (inactive slots) for the active view, but keep at least 36 slots
-    const active = processes.filter(p => p.meanEntropy > 0);
-    const sorted = [...active].sort((a, b) => b.meanEntropy - a.meanEntropy).slice(0, 36);
+    const whitelist = ['systemd', 'tailscaled', 'vmtoolsd', 'dbus-daemon', 'systemd-journal', 'systemd-journald'];
+    const active = processes.filter(p => (p.meanEntropy > 0 || p.rankScore > 0.1) && !whitelist.includes(p.processName));
+    const sorted = [...active].sort((a, b) => b.rankScore - a.rankScore).slice(0, 36);
     
     const padded = [...sorted];
     while (padded.length < 36) {
