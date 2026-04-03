@@ -188,9 +188,11 @@ public:
                 float damping = GetDampingFactor(fv.comm);
                 instant_score = raw_score * damping;
 
-                // Stage 5 Rollback: Snapshot on extremely suspicious activity early
-                if (instant_score > 0.80f) {
-                    ForensicManager::Get().CreateSnapshot(fv.pid, fv.comm);
+                if (!killed_pids_.count(fv.pid)) {
+                    // Stage 5 Rollback: Snapshot on extremely suspicious activity early
+                    if (instant_score > 0.80f) {
+                        ForensicManager::Get().CreateSnapshot(fv.pid, fv.comm);     
+                    }
                 }
 
                 auto end_time = std::chrono::high_resolution_clock::now();
@@ -285,7 +287,7 @@ public:
 private:
     void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature, float rank_score, float instant_score, double high_entropy_ratio, size_t history_size, std::string radar_json) {
         if (pid < 1000) return;
-
+        if (killed_pids_.count(pid)) return; // Already neutralized
         // v9.0 — Throttle First, Kill Later
         // Path 1: Sustained threat — 3+ consecutive high-scoring windows (0.3s at 100ms step)
         // Path 2: Extreme confidence — instant_score >= 0.90 on a SINGLE window
@@ -309,6 +311,7 @@ private:
         std::string reported_level = "MEDIUM";
 
         if (requires_kill) {
+            killed_pids_.insert(pid);
             kill(pid, SIGKILL);
             printf("\n[\033[31m\xf0\x9f\x9b\xa1\xef\xb8\x8f\033[0m] \033[1;31mNEUTRALIZED\033[0m: S.H.I.E.L.D Terminal Response Executed (PID: %u, Threat: %.2f)\n", pid, rank_score);
             
@@ -355,8 +358,7 @@ private:
     std::unique_ptr<FeatureScaler> scaler_;
     std::unique_ptr<InferenceCouncil> council_;
     std::map<uint32_t, std::deque<float>> threat_scores_;
-    std::unordered_set<std::string> known_registry_;
-    std::map<uint32_t, std::chrono::steady_clock::time_point> alert_cooldown_;
+    std::unordered_set<std::string> known_registry_;    std::unordered_set<uint32_t> killed_pids_;    std::map<uint32_t, std::chrono::steady_clock::time_point> alert_cooldown_;
     int throttle_map_fd_;
 
     std::atomic<uint64_t> total_events_;

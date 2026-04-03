@@ -5,6 +5,8 @@
 #include <string>
 #include <fstream>
 #include <mutex>
+#include <thread>
+#include <unordered_set>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -50,29 +52,34 @@ public:
 
     // ─── Snapshot ─────────────────────────────────────────────────────────────
     bool CreateSnapshot(uint32_t pid, const std::string& comm, const std::string& level = "MEDIUM") {
+        std::lock_guard<std::mutex> lock(snapshot_mut_);
+        if (snapshots_taken_.count(pid)) return true;
+        snapshots_taken_.insert(pid);
+
         std::string key = "backup_" + std::to_string(pid);
         std::string backup_dir = vault_path_ + "/" + key;
         mkdir(backup_dir.c_str(), 0777);
 
-        std::string cmd = "cp -a " + sandbox_path_ + "/. " + backup_dir + "/ 2>/tmp/shield_cp_err.log";
-        int ret = system(cmd.c_str());
+        std::thread([this, pid, comm, level, key, backup_dir]() {
+            std::string cmd = "cp -a " + sandbox_path_ + "/. " + backup_dir + "/ 2>/tmp/shield_cp_err.log";
+            int ret = system(cmd.c_str());
 
-        if (ret == 0) {
-            // Write metadata file
-            std::ofstream meta(backup_dir + "/.shield_meta");
-            meta << "{\"pid\":" << pid
-                 << ",\"comm\":\"" << comm << "\""
-                 << ",\"level\":\"" << level << "\""
-                 << ",\"timestamp\":" << CurrentTimeMs()
-                 << "}";
-            std::cout << "[\U0001f6e1\ufe0f] Secure Snapshot: " << key << " ("  << comm << ")" << std::endl;
-            return true;
-        } else {
-            std::cerr << "[\U0001f6e1\ufe0f] Snapshot Error: Copy failed for " << key << " (ret=" << ret << ")" << std::endl;
-            system(("rm -rf " + backup_dir).c_str()); // Clean up empty dir
-            return false;
-        }
-    }
+            if (ret == 0) {
+                // Write metadata file
+                std::ofstream meta(backup_dir + "/.shield_meta");
+                meta << "{\"pid\":" << pid
+                     << ",\"comm\":\"" << comm << "\""
+                     << ",\"level\":\"" << level << "\""
+                     << ",\"timestamp\":" << CurrentTimeMs()
+                     << "}";
+                std::cout << "[\U0001f6e1\ufe0f] Secure Snapshot: " << key << " ("  << comm << ")" << std::endl;
+            } else {
+                std::cerr << "[\U0001f6e1\ufe0f] Snapshot Error: Copy failed for " << key << " (ret=" << ret << ")" << std::endl;
+                system(("rm -rf " + backup_dir).c_str()); // Clean up empty dir     
+            }
+        }).detach();
+
+        return true;
 
     bool ManualSnapshot() {
         if (sandbox_path_.empty() || vault_path_.empty()) {
@@ -300,6 +307,9 @@ private:
         std::ofstream f(".shield_forensics.json", std::ios::app);
         f << json << "\n";
     }
+
+    std::unordered_set<uint32_t> snapshots_taken_;
+    std::mutex snapshot_mut_;
 
     std::string sandbox_path_;
     std::string vault_path_;
