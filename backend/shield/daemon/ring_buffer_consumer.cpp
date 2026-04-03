@@ -286,19 +286,22 @@ public:
             g_dashboard.PushUpdate(ss.str());
 
             // v8.5 — Handle Threats based on Rank Score and Python Level
-            if (final_level > 0 || rank_score > 0.74f) {
-                HandleThreat(fv.pid, final_level, fv.comm, cpu, rss, top_feature, rank_score, history.size(), radar_ss.str());
+            if (final_level > 0 || rank_score > 0.74f || instant_score > 0.80f) {
+                HandleThreat(fv.pid, final_level, fv.comm, cpu, rss, top_feature, rank_score, instant_score, fv.features[FeatureVector::HIGH_ENTROPY_RATIO], history.size(), radar_ss.str());
             }
         }
         engine_->prune_inactive_pids();
     }
 
 private:
-    void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature, float rank_score, size_t history_size, std::string radar_json) {
+    void HandleThreat(uint32_t pid, int level, const char* comm, double cpu, double rss, std::string top_feature, float rank_score, float instant_score, double high_entropy_ratio, size_t history_size, std::string radar_json) {
         if (pid < 1000) return;
 
         // v8.5: If the damped rank_score hits >0.85 over 6 windows, it's a persistent, confirmed threat.
-        bool requires_kill = (rank_score > 0.85f && history_size >= 6);
+        // v8.7 (Flash Bypass & FP Mitigation): 
+        // We drop the instant panic requirement to >0.80 for ultra-fast 'ransomtest.py'
+        // BUT we enforce HIGH_ENTROPY_RATIO > 10% to guarantee `sandbox_prep.py` (plaintext writes) is completely ignored.
+        bool requires_kill = (rank_score > 0.85f && history_size >= 6) || (instant_score >= 0.80f && high_entropy_ratio > 0.1);
 
         // Alert Cooldown: 30 seconds per PID for observations, but bypass cooldown for an actual KILL
         auto now = std::chrono::steady_clock::now();
