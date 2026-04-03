@@ -8,8 +8,11 @@
 #include "bpf/common.h"
 #include "engine/feature_engine.hpp"
 #include "dashboard_bridge.hpp"
+#include "forensic_manager.hpp"
 #include <sys/wait.h>
 #include <iostream>
+#include <limits.h>
+#include <libgen.h>
 
 namespace shield {
     extern DashboardBridge g_dashboard;
@@ -82,6 +85,23 @@ int main(int argc, char **argv) {
     printf("Intercepting storage and memory events...\n");
 
     shield::g_dashboard.Start();
+
+    // v8.0 - Initialize ForensicManager with absolute paths
+    {
+        // Resolve the repo root relative to the daemon binary location
+        char exe_path[PATH_MAX] = {0};
+        readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+        // binary is at: <repo>/backend/shield/shield_daemon
+        // repo root is two levels up
+        std::string daemon_dir = dirname(dirname(exe_path));
+        std::string repo_root  = dirname(const_cast<char*>(daemon_dir.c_str()));
+        // Use absolute paths resolved at runtime
+        std::string sandbox = repo_root + "/scripts/shield_sandbox";
+        std::string vault   = repo_root + "/scripts/.shield_vault";
+        shield::ForensicManager::Get().Init(sandbox, vault);
+        printf("[\xf0\x9f\x9b\xa1\xef\xb8\x8f] Forensic Vault: %s\n", vault.c_str());
+        printf("[\xf0\x9f\x9b\xa1\xef\xb8\x8f] Protected Sandbox: %s\n", sandbox.c_str());
+    }
 
     pthread_t tid;
     pthread_create(&tid, NULL, status_thread_func, NULL);

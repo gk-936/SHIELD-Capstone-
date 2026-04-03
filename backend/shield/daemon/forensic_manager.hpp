@@ -29,6 +29,9 @@ public:
         sandbox_path_ = sandbox_path;
         vault_path_   = vault_path;
         mkdir(vault_path_.c_str(), 0777);
+        std::cout << "[\U0001f6e1\ufe0f] Forensic Hub Initialized." << std::endl;
+        std::cout << "    - Sandbox: " << sandbox_path_ << std::endl;
+        std::cout << "    - Vault:   " << vault_path_ << std::endl;
         LoadHistory();
     }
 
@@ -51,7 +54,7 @@ public:
         std::string backup_dir = vault_path_ + "/" + key;
         mkdir(backup_dir.c_str(), 0777);
 
-        std::string cmd = "cp -rp " + sandbox_path_ + "/* " + backup_dir + "/ 2>/dev/null";
+        std::string cmd = "cp -a " + sandbox_path_ + "/. " + backup_dir + "/ 2>/tmp/shield_cp_err.log";
         int ret = system(cmd.c_str());
 
         if (ret == 0) {
@@ -64,25 +67,36 @@ public:
                  << "}";
             std::cout << "[\U0001f6e1\ufe0f] Secure Snapshot: " << key << " ("  << comm << ")" << std::endl;
             return true;
+        } else {
+            std::cerr << "[\U0001f6e1\ufe0f] Snapshot Error: Copy failed for " << key << " (ret=" << ret << ")" << std::endl;
+            system(("rm -rf " + backup_dir).c_str()); // Clean up empty dir
+            return false;
         }
-        return false;
     }
 
     bool ManualSnapshot() {
+        if (sandbox_path_.empty() || vault_path_.empty()) {
+            std::cerr << "[\U0001f6e1\ufe0f] Snapshot failed: ForensicManager not initialized. Call Init() first." << std::endl;
+            return false;
+        }
         std::string ts = std::to_string(CurrentTimeMs());
         std::string key = "manual_" + ts;
         std::string backup_dir = vault_path_ + "/" + key;
         mkdir(backup_dir.c_str(), 0777);
 
-        std::string cmd = "cp -rp " + sandbox_path_ + "/* " + backup_dir + "/ 2>/dev/null";
+        std::string cmd = "cp -a " + sandbox_path_ + "/. " + backup_dir + "/ 2>/tmp/shield_manual_err.log";
         int ret = system(cmd.c_str());
 
         if (ret == 0) {
             std::ofstream meta(backup_dir + "/.shield_meta");
             meta << "{\"pid\":0,\"comm\":\"manual\",\"level\":\"MANUAL\",\"timestamp\":" << ts << "}";
+            std::cout << "[\U0001f6e1\ufe0f] Manual Snapshot Captured: " << key << std::endl;
             return true;
+        } else {
+            std::cerr << "[\U0001f6e1\ufe0f] Manual Snapshot Failed: Copy error (ret=" << ret << ")" << std::endl;
+            system(("rm -rf " + backup_dir).c_str());
+            return false;
         }
-        return false;
     }
 
     // ─── Rollback ────────────────────────────────────────────────────────────
